@@ -5,14 +5,14 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from blinky_server.testing.drum_scoring import clean_kick_weighted, match_count, score_drums
-from blinky_server.testing.scoring import format_score_summary, score_device_run
-from blinky_server.testing.track_discovery import (
+from blinky_scoring.drum_scoring import clean_kick_weighted, match_count, score_drums
+from blinky_scoring.scoring import format_score_summary, score_device_run
+from blinky_scoring.track_discovery import (
     discover_tracks,
     load_ground_truth,
     segment_ground_truth,
 )
-from blinky_server.testing.types import (
+from blinky_scoring.types import (
     DrumLabels,
     GroundTruth,
     GroundTruthHit,
@@ -20,7 +20,7 @@ from blinky_server.testing.types import (
     TransientEvent,
 )
 
-CORPUS = Path(__file__).resolve().parents[2] / "blinky-test-player" / "music" / "edm"
+CORPUS = Path(__file__).resolve().parents[1] / "edm"
 
 # A two-bar groove at 120 BPM: kick on 1 and 3, snare on 2 and 4, hats on the off-beats.
 KICKS = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
@@ -141,14 +141,3 @@ def test_device_runs_report_drums() -> None:
     assert summary["drums"]["kickR50"] == 1.0 and summary["drums"]["snareR50"] == 0.0
     no_drums = GroundTruth(pattern="t", duration_ms=7000, hits=gt.hits)
     assert format_score_summary(score_device_run(data, start, no_drums))["drums"] is None
-
-
-def test_tuning_targets_drum_metrics_and_skips_missing_values() -> None:
-    from blinky_server.testing.test_runner import _extract_metric
-
-    assert _extract_metric({"drums": {"kickR50": 0.8}}, "kickR50") == 0.8
-    assert _extract_metric({"drums": None}, "kickR50") is None  # track without drum labels
-    assert _extract_metric({"drums": {"kickR50": None}}, "kickR50") is None  # no lag estimate
-    assert _extract_metric({"onsetTracking": {"f1": 0.6}}, "onsetF1") == 0.6
-    silent = score_drums([], LABELS, 7.0).as_dict()
-    assert _extract_metric({"drums": silent}, "drumF") == 0.0  # counted, not skipped

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blinky-scoring"
+version = "1.0.0"
+description = "Scoring blinky detector runs against the edm corpus labels"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["blinky_scoring"]

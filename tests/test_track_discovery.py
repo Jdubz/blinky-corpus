@@ -10,11 +10,11 @@ import json
 
 import pytest
 
-from blinky_server.testing.onset_label_merge import (
+from blinky_scoring.onset_label_merge import (
     HumanEditDriftError,
     apply_human_edits,
 )
-from blinky_server.testing.track_discovery import discover_tracks, load_ground_truth
+from blinky_scoring.track_discovery import discover_tracks, load_ground_truth
 
 
 @pytest.fixture
@@ -106,8 +106,8 @@ def test_apply_human_edits_unit_smoke(auto_onsets):
 
 
 def test_segment_ground_truth_shifts_to_playback_start():
-    from blinky_server.testing.track_discovery import segment_ground_truth
-    from blinky_server.testing.types import GroundTruth, GroundTruthHit, GroundTruthOnset
+    from blinky_scoring.track_discovery import segment_ground_truth
+    from blinky_scoring.types import GroundTruth, GroundTruthHit, GroundTruthOnset
 
     times = [1.0, 91.9, 92.0, 92.5, 126.9, 127.0, 130.0]
     gt = GroundTruth(

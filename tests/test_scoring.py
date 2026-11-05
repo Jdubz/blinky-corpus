@@ -7,8 +7,8 @@ per-signal onset-vs-non-onset stats in both frame and peak mode.
 
 from __future__ import annotations
 
-from blinky_server.testing.scoring import score_device_run
-from blinky_server.testing.types import (
+from blinky_scoring.scoring import score_device_run
+from blinky_scoring.types import (
     GroundTruth,
     GroundTruthHit,
     GroundTruthOnset,
