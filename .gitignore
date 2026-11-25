@@ -1,3 +1,5 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
+# drum-reviewer autosaves (tools/drum-reviewer/)
+edm/drums_human/.drafts/
