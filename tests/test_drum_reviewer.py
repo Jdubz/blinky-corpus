@@ -22,6 +22,7 @@ srv = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(srv)
 
 DUR = 10.0
+JSON = {"Content-Type": "application/json"}
 ADTOF_GEN = {"algorithm": "adtof_frame_rnn", "version": 1}
 
 
@@ -303,24 +304,54 @@ def test_http_refuses_bad_stems(web, path):
 def test_http_save_traversal_refused(web, edm):
     data = json.dumps({"onsets": []}).encode()
     for stem in ("../a", "..%2F..%2Fx", "drums_human/c", "a.mp3/../b"):
-        st, _, _ = web("POST", f"/api/save?stem={stem}", data, {"Content-Length": str(len(data))})
+        st, _, _ = web("POST", f"/api/save?stem={stem}", data, {"Content-Length": str(len(data)), **JSON})
         assert st in (400, 404)
     assert not list(edm.parent.glob("*.drums.json"))
 
 
 def test_http_post_size_cap(web):
     st, _, b = web("POST", "/api/save?stem=a", b"x",
-                    {"Content-Length": str(srv.MAX_POST_BYTES + 1)})
+                    {"Content-Length": str(srv.MAX_POST_BYTES + 1), **JSON})
     assert st == 413
 
 
 def test_http_save_and_sha_refusal(web, edm, corpus):
     good = json.dumps(body(corpus, "a", [(1.0, "kick")])).encode()
-    st, _, b = web("POST", "/api/save?stem=a", good, {"Content-Length": str(len(good))})
+    st, _, b = web("POST", "/api/save?stem=a", good, {"Content-Length": str(len(good)), **JSON})
     assert st == 200 and json.loads(b)["ok"]
     bad = json.dumps({**body(corpus, "a", [(1.0, "kick")]), "audio_sha256": "1" * 64}).encode()
-    st, _, b = web("POST", "/api/save?stem=a", bad, {"Content-Length": str(len(bad))})
+    st, _, b = web("POST", "/api/save?stem=a", bad, {"Content-Length": str(len(bad)), **JSON})
     assert st == 409 and "mismatch" in json.loads(b)["error"]
+
+
+def test_http_refuses_cross_site_writes(web, edm, corpus):
+    data = json.dumps(body(corpus, "a", [(1.0, "kick")], ranges=[(0, DUR)])).encode()
+    n = {"Content-Length": str(len(data))}
+    # a "simple" cross-origin request (no preflight) can't carry application/json
+    assert web("POST", "/api/save?stem=a", data, {**n, "Content-Type": "text/plain"})[0] == 415
+    assert web("POST", "/api/save?stem=a", data, n)[0] == 415
+    st, _, _ = web("POST", "/api/save?stem=a", data, {**n, **JSON, "Origin": "https://evil.example"})
+    assert st == 403
+    # DNS rebinding: a hostile name resolving to this server
+    st, _, _ = web("POST", "/api/draft?stem=a", data, {**n, **JSON, "Host": "evil.example:8766",
+                                                        "Origin": "http://evil.example:8766"})
+    assert st == 403
+    assert web("GET", "/api/tracks", headers={"Host": "evil.example"})[0] == 403
+    assert not (edm / "drums_human" / "a.drums.json").exists()
+    assert not (edm / "drums_human" / ".drafts").exists()
+    # the page itself: same origin, JSON
+    st, _, _ = web("POST", "/api/save?stem=a", data, {**n, **JSON, "Origin": "http://localhost:8766",
+                                                       "Host": "localhost:8766"})
+    assert st == 200
+
+
+def test_host_allowed():
+    names = srv.local_names() | {"studio.lan"}
+    for ok in ("127.0.0.1:8766", "[::1]:8766", "192.168.1.20", "localhost:8766", "studio.lan:1",
+               f"{srv.socket.gethostname()}:8766"):
+        assert srv.host_allowed(ok, names), ok
+    for bad in ("evil.example", "evil.example:8766", "", None, "localhost.evil.example"):
+        assert not srv.host_allowed(bad, names), bad
 
 
 def test_http_audio_range(web, edm):

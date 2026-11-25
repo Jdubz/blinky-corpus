@@ -26,7 +26,9 @@ import hashlib
 import json
 import math
 import os
+import ipaddress
 import re
+import socket
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -512,20 +514,46 @@ def save_draft(c: Corpus, stem: str, body: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "updated": doc["updated"]}
 
 
-def discard_draft(c: Corpus, stem: str) -> dict[str, Any]:
-    stem = c.validate_stem(stem)
-    dp = c.draft_path(stem)
-    with _write_lock:
-        if dp.is_file():
-            dp.unlink()
-    return {"ok": True}
-
-
 # --- HTTP ---------------------------------------------------------------------
+#
+# No auth (a trusted LAN tool), but other web pages open in the reviewer's browser must not
+# be able to write ground truth:
+#   * every request's Host must be an IP literal, localhost or this machine's name, which
+#     defeats DNS rebinding (a hostile name resolving to this server);
+#   * a POST must be Content-Type: application/json (a cross-origin page can't send that
+#     without a CORS preflight, which this server never answers) and, when it carries an
+#     Origin, the Origin must be this server.
+
+
+def _split_host(value: str) -> str:
+    v = value.strip().lower()
+    if v.startswith("["):  # [ipv6]:port
+        return v[1 : v.find("]")] if "]" in v else v
+    return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+
+
+def local_names() -> set[str]:
+    names = {"localhost"}
+    for n in (socket.gethostname(), socket.getfqdn()):
+        if n:
+            names |= {n.lower(), n.lower().split(".")[0], n.lower().split(".")[0] + ".local"}
+    return names
+
+
+def host_allowed(host: str | None, allowed: set[str]) -> bool:
+    if not host:
+        return False
+    h = _split_host(host)
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        return h in allowed
 
 
 class Handler(BaseHTTPRequestHandler):
     corpus: Corpus  # set by make_server()
+    allowed_hosts: set[str]  # set by make_server()
     server_version = "drum-reviewer/1"
 
     def log_message(self, fmt: str, *args: Any) -> None:  # quiet audio/api chatter
@@ -560,11 +588,25 @@ class Handler(BaseHTTPRequestHandler):
             self.log_error("%s %s failed: %r", self.command, self.path, e)
             self._send_json({"error": f"server error: {e!r}"}, 500)
 
+    def _check_host(self) -> None:
+        if not host_allowed(self.headers.get("Host"), self.allowed_hosts):
+            raise ApiError(403, f"Host {self.headers.get('Host')!r} not allowed (--allow-host)")
+
+    def _check_post(self) -> None:
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            raise ApiError(415, "POST must be Content-Type: application/json")
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            o = urlparse(origin)
+            if o.netloc.lower() != (self.headers.get("Host") or "").lower():
+                raise ApiError(403, f"cross-origin POST from {origin!r} refused")
+
     def do_GET(self) -> None:
-        self._dispatch(self._get)
+        self._dispatch(lambda: (self._check_host(), self._get()))
 
     def do_POST(self) -> None:
-        self._dispatch(self._post)
+        self._dispatch(lambda: (self._check_host(), self._check_post(), self._post()))
 
     def _get(self) -> None:
         url = urlparse(self.path)
@@ -611,8 +653,6 @@ class Handler(BaseHTTPRequestHandler):
             stem = self._stem_param(q)
             body = self._read_body()
             self._send_json(routes[path](self.corpus, stem, body))
-        elif path == "/api/discard-draft":
-            self._send_json(discard_draft(self.corpus, self._stem_param(q)))
         else:
             raise ApiError(404, "not found")
 
@@ -652,11 +692,14 @@ class Handler(BaseHTTPRequestHandler):
                 left -= len(chunk)
 
 
-def make_server(edm: Path, host: str = "127.0.0.1", port: int = 8766) -> ThreadingHTTPServer:
+def make_server(
+    edm: Path, host: str = "127.0.0.1", port: int = 8766, allow_hosts: tuple[str, ...] = ()
+) -> ThreadingHTTPServer:
     corpus = Corpus(edm)
     if not corpus.edm.is_dir():
         raise SystemExit(f"edm dir not found: {corpus.edm}")
-    handler = type("BoundHandler", (Handler,), {"corpus": corpus})
+    allowed = local_names() | {h.lower() for h in allow_hosts}
+    handler = type("BoundHandler", (Handler,), {"corpus": corpus, "allowed_hosts": allowed})
     return ThreadingHTTPServer((host, port), handler)
 
 
@@ -666,8 +709,11 @@ def main() -> None:
     ap.add_argument("--host", default="127.0.0.1",
                     help="127.0.0.1 (default) for this machine only; 0.0.0.0 to serve the LAN")
     ap.add_argument("--edm", type=Path, default=DEFAULT_EDM, help=f"corpus dir (default {DEFAULT_EDM})")
+    ap.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                    help="extra hostname the page may be opened under (IPs, localhost and this "
+                         "machine's name are always allowed)")
     args = ap.parse_args()
-    srv = make_server(args.edm, args.host, args.port)
+    srv = make_server(args.edm, args.host, args.port, tuple(args.allow_host))
     c: Corpus = srv.RequestHandlerClass.corpus  # type: ignore[attr-defined]
     stems = c.stems()
     print(f"drum-reviewer: {len(stems)} tracks in {c.edm}")

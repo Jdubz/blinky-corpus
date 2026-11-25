@@ -9,8 +9,10 @@ The page has no external dependencies and works offline. The server uses only th
 ```sh
 python tools/drum-reviewer/server.py                  # http://localhost:8766
 python tools/drum-reviewer/server.py --host 0.0.0.0   # serve the LAN (no auth: trusted networks only)
-python tools/drum-reviewer/server.py --port 8770 --edm path/to/edm
+python tools/drum-reviewer/server.py --port 8770 --edm path/to/edm --allow-host studio.lan
 ```
+
+The page answers only under an IP address, `localhost` or this machine's hostname. For another name, such as a DNS alias, add `--allow-host NAME`. Writes must be same-origin `application/json` POSTs. Together these stop other web pages open in your browser from writing labels, including through DNS rebinding.
 
 Open the page in a desktop Chrome or Firefox. The track list (`T`) ranks unfinished tracks worst first, by how much ADTOF and the old band labels disagree. It also shows each track's reviewed share, counts and whether a draft exists.
 
@@ -124,4 +126,4 @@ Partial files can be committed too: the scorer ignores a human file until it's c
 
 ## Tests
 
-`tests/test_drum_reviewer.py` (pytest, small fixture files) covers listing, seed order, saving, validation, atomic writes, path traversal, the size cap, sha refusal, audio range requests, and the scorer reading a saved file. `python tools/drum-reviewer/check_js.py` syntax-checks the page's inline scripts with `node --check` and refuses external resources. CI runs both.
+`tests/test_drum_reviewer.py` (pytest, small fixture files) covers listing, seed order, saving, validation, atomic writes, path traversal, the size cap, sha refusal, cross-site and DNS-rebinding refusal, audio range requests, and the scorer reading a saved file. `python tools/drum-reviewer/check_js.py` syntax-checks the page's inline scripts with `node --check` and refuses external resources. CI runs both.
