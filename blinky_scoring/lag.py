@@ -36,9 +36,11 @@ lag.
 The chosen peak is refined with the nearest-label histogram estimator (`scoring.
 estimate_audio_latency`) on the detections shifted by the coarse lag, where nearest-label
 matching is valid (the residual is well under half the label spacing). The search grid is
-10 ms, the estimator's bucket width, so a refinement from a coarse lag near 0 reproduces the
-old estimate whenever that one was right: simulated runs (the firmware tracker harness, a
-few frames of lag) score as before.
+10 ms, the estimator's bucket width, so the refinement reproduces the old estimate wherever
+that one was right and the shift leaves each detection's nearest label unchanged. On the
+firmware tracker harness (simulated, 108 rows) 105 got the same lag, two moved by 0.1 and
+3 ms (one detection's nearest label changed), and one had aliased to -189 ms and fallen back
+to 0 under the old estimate (blinky-corpus#10).
 """
 
 from __future__ import annotations
@@ -124,8 +126,8 @@ def mcnemar_p(b: int, c: int) -> float:
     if n == 0:
         return 1.0
     k = min(b, c)
-    tail = sum(math.comb(n, i) for i in range(k + 1)) / 2.0**n
-    return min(1.0, 2.0 * tail)
+    # Integer division of exact integers: 2.0**n overflows a float from n = 1024.
+    return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / (1 << n))
 
 
 def _grid(lo: float, hi: float) -> list[int]:

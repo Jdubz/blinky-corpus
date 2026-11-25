@@ -172,3 +172,6 @@ def test_mcnemar_exact() -> None:
     assert mcnemar_p(5, 0) == pytest.approx(2 / 32)
     assert mcnemar_p(6, 0) == pytest.approx(2 / 64)
     assert mcnemar_p(10, 10) == 1.0
+    # Long tracks: thousands of discordant labels must not overflow.
+    assert mcnemar_p(1000, 1000) == 1.0
+    assert mcnemar_p(1300, 1000) < 1e-9
