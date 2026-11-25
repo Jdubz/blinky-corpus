@@ -120,7 +120,7 @@ The server refuses to save (HTTP 409) when the mp3's sha256 doesn't match the sh
 
 1. Commit `edm/drums_human/<stem>.drums.json` on a branch of blinky-corpus and open a PR. CI runs these tests and the scorer's.
 2. Once it's merged to `main`, `blinky_scoring.drum_scoring.drum_label_path` picks the human file for that track when `complete` is true. Otherwise it falls back to `drums_adtof/`.
-3. Dependabot opens a PR in blinky_time (and blinky-firmware) to bump the `corpus` submodule pin. Once that merges, blinky-server's validation suite and the firmware's corpus gate score against the new ground truth.
+3. A PR in blinky_time (and blinky-firmware) bumps the `corpus` submodule pin. Once that merges, blinky-server's validation suite and the firmware's corpus gate score against the new ground truth.
 
 Partial files can be committed too: the scorer ignores a human file until it's complete.
 
