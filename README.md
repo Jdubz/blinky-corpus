@@ -2,7 +2,7 @@
 
 The validation corpus for blinky, and the code that scores a run against it.
 
-- `edm/`: 18 representative EDM tracks (`*.mp3`) with their labels: `*.onsets_consensus.json` (onsets), `*.pattern_gt.json`, `kick_weighted/` (drum labels).
+- `edm/`: 18 representative EDM tracks (`*.mp3`) with their labels: `*.onsets_consensus.json` (onsets), `*.pattern_gt.json`, `kick_weighted/` (drum labels from the old band-onset generator, known bad), `drums_adtof/` (ADTOF drum labels, the starting point for hand-curated ground truth: #4).
 - `archive/beats_gt/`: the old beat ground truth (`*.beats.json`) for the same tracks, archived 2026-04-29 when the task became drum hits. Never an eval target or a training label.
 - `blinky_scoring/`: scoring a detector run against those labels. It covers onset tracking, kick/snare drum metrics (`drum_scoring.py`, against cleaned `kick_weighted` labels), rhythm, and label loading (`track_discovery.py`, `onset_label_merge.py`). Pure standard library.
 
