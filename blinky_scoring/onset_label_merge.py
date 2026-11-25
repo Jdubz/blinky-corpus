@@ -26,7 +26,7 @@ The reviewer is the only writer. Training (prepare_dataset.py) and validation
 A near-identical copy lives at
 ``ml-training/scripts/onset_label_merge.py`` (the source of truth — the
 training pipeline imports it directly). This copy exists so blinky-server,
-running on blinkyhost, doesn't need the ml-training package on its sys.path.
+running on the fleet server, doesn't need the ml-training package on its sys.path.
 **If you change this file, change the other one.**
 """
 

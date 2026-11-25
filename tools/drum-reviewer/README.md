@@ -9,7 +9,7 @@ The page has no external dependencies and works offline. The server uses only th
 ```sh
 python tools/drum-reviewer/server.py                  # http://localhost:8766
 python tools/drum-reviewer/server.py --host 0.0.0.0   # serve the LAN (no auth: trusted networks only)
-python tools/drum-reviewer/server.py --port 8770 --edm path/to/edm --allow-host studio.lan
+python tools/drum-reviewer/server.py --port 8770 --edm path/to/edm --allow-host studio.example.invalid
 ```
 
 The page answers only under an IP address, `localhost` or this machine's hostname. For another name, such as a DNS alias, add `--allow-host NAME`. Writes must be same-origin `application/json` POSTs. Together these stop other web pages open in your browser from writing labels, including through DNS rebinding.

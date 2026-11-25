@@ -346,8 +346,8 @@ def test_http_refuses_cross_site_writes(web, edm, corpus):
 
 
 def test_host_allowed():
-    names = srv.local_names() | {"studio.lan"}
-    for ok in ("127.0.0.1:8766", "[::1]:8766", "192.168.1.20", "localhost:8766", "studio.lan:1",
+    names = srv.local_names() | {"studio.example.invalid"}
+    for ok in ("127.0.0.1:8766", "[::1]:8766", "192.0.2.20", "localhost:8766", "studio.example.invalid:1",
                f"{srv.socket.gethostname()}:8766"):
         assert srv.host_allowed(ok, names), ok
     for bad in ("evil.example", "evil.example:8766", "", None, "localhost.evil.example"):

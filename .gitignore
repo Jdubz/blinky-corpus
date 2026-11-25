@@ -3,3 +3,8 @@ __pycache__/
 .pytest_cache/
 # drum-reviewer autosaves (tools/drum-reviewer/)
 edm/drums_human/.drafts/
+# Private host config lives in ~/.config/blinky/, never in a repo (scripts/check_topology.py).
+hosts.env
+observability.env
+build.env
+spark.env
