@@ -20,7 +20,7 @@ jobs:
       run: |
         for mp3 in edm/*.mp3; do
           s=${mp3%.mp3}
-          for want in "$s.onsets_consensus.json" "edm/kick_weighted/$(basename "$s").kick_weighted.json"; do
+          for want in "$s.onsets_consensus.json" "edm/kick_weighted/$(basename "$s").kick_weighted.json" "edm/drums_adtof/$(basename "$s").kick_weighted.json"; do
             [ -f "$want" ] || { echo "::error::missing $want"; exit 1; }
           done
         done

@@ -13,10 +13,17 @@ F1 scored 0.68 while the hat looked "almost entirely random" (#280), so a run is
 Matching is one-to-one. A constant per-run lag is estimated against the drum labels and
 removed first, as the #280 study did, so a fixed pipeline delay isn't scored as misses.
 
-Labels are `kick_weighted` cleaned by `ml-training/scripts/clean_kick_weighted.py`'s rule:
-an onset is kept only if a full-mix consensus onset backed by >= 2 systems lies within 70 ms
-(P 0.65 -> 0.91 against hand-curated GT). `ml-training/tests/test_drum_label_sync.py`
-checks this copy of the rule against that script.
+Labels, best first (`drum_label_path`):
+  1. `edm/drums_human/<stem>.drums.json` marked complete: hand-curated ground truth (#4),
+     used as is.
+  2. `edm/drums_adtof/<stem>.kick_weighted.json`: ADTOF (synthetic kick F1 0.93, snare 1.00),
+     used as is. The consensus cleaning below was built for the band generator's false
+     positives; applied to ADTOF it would drop real hits the onset consensus misses.
+  3. `edm/kick_weighted/` (the band-onset generator, legacy) cleaned by
+     `ml-training/scripts/clean_kick_weighted.py`'s rule: an onset is kept only if a full-mix
+     consensus onset backed by >= 2 systems lies within 70 ms. `ml-training/tests/
+     test_drum_label_sync.py` checks this copy of the rule against that script.
+A human file's hats (not curated) come from the ADTOF file, for `lone_hat`.
 
 Pure Python: blinky-server doesn't depend on numpy.
 """
@@ -97,11 +104,61 @@ def clean_kick_weighted(kw: dict[str, Any], consensus: dict[str, Any]) -> list[d
     return kept
 
 
+HUMAN_DIR = "drums_human"
+ADTOF_DIR = "drums_adtof"
+LEGACY_DIR = "kick_weighted"
+
+
+def _human_path(corpus_dir: Path, stem: str) -> Path:
+    return corpus_dir / HUMAN_DIR / f"{stem}.drums.json"
+
+
+def _adtof_path(corpus_dir: Path, stem: str) -> Path:
+    return corpus_dir / ADTOF_DIR / f"{stem}.kick_weighted.json"
+
+
+def _human_complete(path: Path) -> bool:
+    return path.is_file() and json.loads(path.read_text()).get("complete") is True
+
+
+def drum_label_path(corpus_dir: Path, stem: str) -> Path:
+    """The best drum labels for a track: complete human ground truth, else ADTOF, else the
+    legacy band-generator file (which may not exist; callers check)."""
+    human = _human_path(corpus_dir, stem)
+    if _human_complete(human):
+        return human
+    adtof = _adtof_path(corpus_dir, stem)
+    if adtof.is_file():
+        return adtof
+    return corpus_dir / LEGACY_DIR / f"{stem}.kick_weighted.json"
+
+
 def load_drum_labels(kw_path: Path, consensus_path: Path) -> DrumLabels:
-    kw = json.loads(kw_path.read_text())
-    if kw.get("skipped"):
+    """Load the labels at ``kw_path`` (any of the three kinds ``drum_label_path`` returns)."""
+    data = json.loads(kw_path.read_text())
+    if kw_path.parent.name == HUMAN_DIR:
+        if data.get("complete") is not True:
+            raise ValueError(f"{kw_path}: human drum labels are not marked complete")
+        onsets = data.get("onsets", [])
+        adtof = _adtof_path(kw_path.parent.parent, data.get("track") or kw_path.name.split(".")[0])
+        hats = (
+            sorted(o["time"] for o in json.loads(adtof.read_text()).get("onsets", [])
+                   if o["type"] == "hihat")
+            if adtof.is_file()
+            else []
+        )
+        return DrumLabels(
+            sorted(o["time"] for o in onsets if o["type"] == "kick"),
+            sorted(o["time"] for o in onsets if o["type"] == "snare"),
+            hats,
+            source=str(kw_path),
+        )
+    if data.get("skipped"):
         raise ValueError(f"{kw_path}: drum labels marked skipped (separation failed upstream)")
-    kept = clean_kick_weighted(kw, json.loads(consensus_path.read_text()))
+    if kw_path.parent.name == ADTOF_DIR:
+        kept = data.get("onsets", [])
+    else:
+        kept = clean_kick_weighted(data, json.loads(consensus_path.read_text()))
 
     def times(kind: str) -> list[float]:
         return sorted(o["time"] for o in kept if o["type"] == kind)
@@ -111,12 +168,8 @@ def load_drum_labels(kw_path: Path, consensus_path: Path) -> DrumLabels:
         times("snare"),
         times("hihat"),
         source=str(kw_path),
-        dropped=len(kw.get("onsets", [])) - len(kept),
+        dropped=len(data.get("onsets", [])) - len(kept),
     )
-
-
-def drum_label_path(corpus_dir: Path, stem: str) -> Path:
-    return corpus_dir / "kick_weighted" / f"{stem}.kick_weighted.json"
 
 
 def match_count(est: list[float], ref: list[float], tol: float) -> int:

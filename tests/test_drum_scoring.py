@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
+
+import pytest
 
 from blinky_scoring.drum_scoring import clean_kick_weighted, match_count, score_drums
 from blinky_scoring.scoring import format_score_summary, score_device_run
@@ -118,7 +121,60 @@ def test_the_corpus_has_drum_labels_and_they_load() -> None:
     assert len(tracks) == 18 and all("drum_labels" in t for t in tracks)
     t = tracks[0]
     gt = load_ground_truth(t["ground_truth"], t.get("human_edits"), t["drum_labels"])
-    assert gt.drums is not None and len(gt.drums.kicks) > 50 and gt.drums.dropped > 0
+    # ADTOF labels, used as is (no consensus cleaning), until human ground truth is complete.
+    assert gt.drums is not None and len(gt.drums.kicks) > 50 and len(gt.drums.snares) > 20
+    assert "/drums_adtof/" in gt.drums.source and gt.drums.dropped == 0
+
+
+def _write(path: Path, obj: object) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj))
+    return path
+
+
+def test_drum_label_precedence_human_then_adtof_then_legacy(tmp_path: Path) -> None:
+    from blinky_scoring.drum_scoring import drum_label_path
+
+    legacy = tmp_path / "kick_weighted" / "t.kick_weighted.json"
+    assert drum_label_path(tmp_path, "t") == legacy  # nothing exists: the legacy path
+    adtof = _write(tmp_path / "drums_adtof" / "t.kick_weighted.json", {"onsets": []})
+    assert drum_label_path(tmp_path, "t") == adtof
+    human = _write(tmp_path / "drums_human" / "t.drums.json", {"complete": False, "onsets": []})
+    assert drum_label_path(tmp_path, "t") == adtof  # an unfinished review isn't ground truth
+    _write(human, {"complete": True, "onsets": []})
+    assert drum_label_path(tmp_path, "t") == human
+
+
+def test_human_labels_load_as_is_with_hats_from_adtof(tmp_path: Path) -> None:
+    from blinky_scoring.drum_scoring import load_drum_labels
+
+    _write(tmp_path / "drums_adtof" / "t.kick_weighted.json", {"onsets": [
+        {"time": 1.0, "type": "kick", "weight": 1.0}, {"time": 1.25, "type": "hihat", "weight": 0.0},
+    ]})
+    human = _write(
+        tmp_path / "drums_human" / "t.drums.json",
+        {
+            "schema": 1,
+            "track": "t",
+            "complete": True,
+            "onsets": [{"time": 2.0, "type": "snare"}, {"time": 1.0, "type": "kick"}],
+        },
+    )
+    labels = load_drum_labels(human, tmp_path / "unused.json")
+    assert labels.kicks == [1.0] and labels.snares == [2.0] and labels.hats == [1.25]
+    _write(human, {"complete": False, "onsets": []})
+    with pytest.raises(ValueError, match="not marked complete"):
+        load_drum_labels(human, tmp_path / "unused.json")
+
+
+def test_adtof_labels_are_not_consensus_cleaned(tmp_path: Path) -> None:
+    from blinky_scoring.drum_scoring import load_drum_labels
+
+    adtof = _write(tmp_path / "drums_adtof" / "t.kick_weighted.json", {"onsets": [
+        {"time": 1.0, "type": "kick", "weight": 1.0}, {"time": 5.0, "type": "snare", "weight": 1.0},
+    ]})
+    labels = load_drum_labels(adtof, _write(tmp_path / "c.json", {"onsets": []}))
+    assert labels.kicks == [1.0] and labels.snares == [5.0] and labels.dropped == 0
 
 
 def test_device_runs_report_drums() -> None:

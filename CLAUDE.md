@@ -14,7 +14,7 @@ Representative EDM with clear percussion. Lock in performance here before measur
 
 ## The task is drum hits, not beats
 
-Detectors are scored on **kicks and snares**: recall at ±30/±50 ms and the share of detections that land on a kick or snare, against cleaned `kick_weighted` labels. All-onset F1 is secondary at most. Ground truth is onset labels (`*.onsets_consensus.json`, `kick_weighted/`), never beat-tracker output (`consensus_v*`, allin1, beat_this, beatnet, demucs_beats): those teach a detector to suppress off-beat hits.
+Detectors are scored on **kicks and snares**: recall at ±30/±50 ms and the share of detections that land on a kick or snare, against the best drum labels a track has (`blinky_scoring.drum_scoring.drum_label_path`): complete hand-curated ground truth in `edm/drums_human/` (#4), else ADTOF in `edm/drums_adtof/`; the band-generator `kick_weighted/` is legacy. All-onset F1 is secondary at most. Ground truth is onset labels (`*.onsets_consensus.json`, `drums_human/`, `drums_adtof/`), never beat-tracker output (`consensus_v*`, allin1, beat_this, beatnet, demucs_beats): those teach a detector to suppress off-beat hits.
 
 ## Human edits are ground truth
 

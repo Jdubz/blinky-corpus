@@ -8,4 +8,4 @@ On blinky_time's drum label suite (`ml-training/scripts/drum_label_adtof.json` a
 - kick F1 0.93 and snare F1 1.00 on synthetic drums, against 0.66 and 0.16 for the band-onset generator behind `../kick_weighted/`;
 - 0 snares labelled as kicks, against 106 of 120.
 
-The scorer still reads `../kick_weighted/` until it is switched in its own PR.
+The scorer reads these for every track without complete human ground truth (`blinky_scoring.drum_scoring.drum_label_path`).
