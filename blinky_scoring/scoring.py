@@ -652,10 +652,12 @@ def score_device_run(
                     )
 
     # Drum metrics (#294), the primary score, on the same detections. A measured latency
-    # is used as the lag; otherwise score_drums estimates it against the drum labels.
+    # is used as the lag; otherwise score_drums searches for it against the drum labels over
+    # the lags an acoustic run can have (playback start + speaker + mic + detection: lag.py).
     drums = None
     if gt_data.drums is not None:
         from .drum_scoring import score_drums
+        from .lag import ACOUSTIC
 
         drums = score_drums(
             [(d["timestamp_ms"] / 1000.0, d["strength"]) for d in detections],
@@ -663,6 +665,7 @@ def score_device_run(
             raw_duration / 1000.0,
             lag_ms=latency_ms,
             fallback_lag_ms=latency_correction_ms,  # the onset scoring's correction
+            lag_search=ACOUSTIC,
         ).as_dict()
 
     return DeviceRunScore(

@@ -10,8 +10,11 @@ F1 scored 0.68 while the hat looked "almost entirely random" (#280), so a run is
   lone_hat            share of lone hats (no kick or snare within 50 ms) that fired a detection
   det_per_s           detections per second
 
-Matching is one-to-one. A constant per-run lag is estimated against the drum labels and
-removed first, as the #280 study did, so a fixed pipeline delay isn't scored as misses.
+Matching is one-to-one. A constant per-run lag is removed first, as the #280 study did, so a
+fixed pipeline delay isn't scored as misses: the caller's measured lag, else one searched for
+against the kick + snare labels within a window of lags the rig can produce, else the caller's
+fallback (`lag.py` has the method and its sources). Where it came from is in the score
+(`lagSource`, with the evidence: `lagMatches`, `lagRunnerUpMs`, `lagAmbiguous`, `lagNote`).
 
 Labels, best first (`drum_label_path`):
   1. `edm/drums_human/<stem>.drums.json` marked complete: hand-curated ground truth (#4),
@@ -37,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .scoring import PLAUSIBLE_LATENCY_MAX, PLAUSIBLE_LATENCY_MIN, estimate_audio_latency
+from .lag import FALLBACK, SIMULATED, LagEstimate, LagSearch, estimate_lag
 from .types import DrumLabels
 
 CLEAN_TOLERANCE_SEC = 0.070
@@ -60,16 +63,18 @@ class DrumScore:
     n_kicks: int
     n_snares: int
     n_detections: int
-    # False when the lag couldn't be estimated (too few detections near a label) and the
-    # caller's fallback was used. The run is still scored: a silent detector scores 0.
+    # False when the lag couldn't be measured or estimated (too few detections near a label)
+    # and the caller's fallback was used (`lag.source == "fallback"`). The run is still
+    # scored: a silent detector scores 0.
     lag_estimated: bool = True
     provisional: list[str] = field(default_factory=lambda: ["snare_r50"])
+    lag: LagEstimate | None = None  # where lag_ms came from, and the evidence for it
 
     def as_dict(self) -> dict[str, Any]:
         def r(x: float) -> float | None:
             return None if math.isnan(x) else round(x, 4)
 
-        return {
+        out: dict[str, Any] = {
             "kickR50": r(self.kick_r50),
             "kickR30": r(self.kick_r30),
             "snareR50": r(self.snare_r50),
@@ -86,6 +91,9 @@ class DrumScore:
             "lagEstimated": self.lag_estimated,
             "provisional": self.provisional,
         }
+        if self.lag is not None:
+            out.update({k: v for k, v in self.lag.as_dict().items() if k != "lagMs"})
+        return out
 
 
 def clean_kick_weighted(kw: dict[str, Any], consensus: dict[str, Any]) -> list[dict[str, Any]]:
@@ -196,24 +204,30 @@ def score_drums(
     duration_s: float,
     lag_ms: float | None = None,
     fallback_lag_ms: float = 0.0,
+    *,
+    lag_search: LagSearch = SIMULATED,
 ) -> DrumScore:
     """Score detections (time_s, strength) against drum labels on the same clock.
 
-    `lag_ms` is estimated against kicks + snares when not given. When it can't be (too few
+    `lag_ms` is the caller's measured lag, used as is (and cross-checked against the music,
+    reported in `lag`). Without it the lag is searched for against kicks + snares within
+    `lag_search`'s window: the default fits simulated runs (a few frames of detector delay);
+    acoustic runs pass `lag.ACOUSTIC`. When the music gives no lag (too few
     detections near a label, e.g. a detector a tuning value has silenced), the run is scored
-    at `fallback_lag_ms` and flagged, never dropped: dropping it would let a tuner prefer
-    values that silence the detector (review of #307). Metrics are NaN only where the labels
-    themselves are empty (e.g. no kicks in the segment)."""
+    at `fallback_lag_ms` and flagged (`lag_estimated` False, `lag.source` "fallback"), never
+    dropped: dropping it would let a tuner prefer values that silence the detector (review of
+    #307). Metrics are NaN only where the labels themselves are empty (e.g. no kicks)."""
     drums = sorted(labels.kicks + labels.snares)
-    estimated = True  # a lag the caller gives (measured) is trusted as is
-    if lag_ms is None:
-        lag_ms = estimate_audio_latency(
-            [{"timestamp_ms": t * 1000.0, "strength": s} for t, s in detections],
-            [{"time": t, "strength": 1.0, "expect_trigger": True} for t in drums],
-            duration_s * 1000.0,
-        )
-        if lag_ms is None or not PLAUSIBLE_LATENCY_MIN <= lag_ms <= PLAUSIBLE_LATENCY_MAX:
-            lag_ms, estimated = fallback_lag_ms, False
+    lag = estimate_lag(
+        detections,
+        drums,
+        duration_s,
+        search=lag_search,
+        tol_s=DRUM_TOL_SEC,
+        measured_ms=lag_ms,
+        fallback_ms=fallback_lag_ms,
+    )
+    lag_ms = lag.lag_ms
     det_per_s = len(detections) / duration_s if duration_s > 0 else float("nan")
     est = sorted(t - lag_ms / 1000.0 for t, _ in detections)
 
@@ -239,5 +253,6 @@ def score_drums(
         n_kicks=len(labels.kicks),
         n_snares=len(labels.snares),
         n_detections=len(est),
-        lag_estimated=estimated,
+        lag_estimated=lag.source != FALLBACK,
+        lag=lag,
     )
