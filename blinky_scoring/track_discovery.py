@@ -57,8 +57,8 @@ def discover_tracks(
             "ground_truth": str(d / onset_file),
         }
         # Optional human-edit overlay sits next to the audio. Riding with git
-        # is the sync mechanism between curation (devtop) and validation
-        # (blinkyhost) — the file is checked in.
+        # is the sync mechanism between curation (a workstation) and validation
+        # (the fleet server) — the file is checked in.
         human_file = f"{base}.onsets_human.json"
         if human_file in files:
             track["human_edits"] = str(d / human_file)

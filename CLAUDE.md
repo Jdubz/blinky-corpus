@@ -23,3 +23,7 @@ Detectors are scored on **kicks and snares**: recall at ±30/±50 ms and the sha
 ## No silent fallbacks
 
 Errors fail loudly. A missing label file, an empty track, a malformed overlay or a zero denominator that means a bug raises; it's never scored as 0 or skipped quietly. Where 0 is the correct answer (no detections on a silent track), say so in a comment.
+
+## No network topology
+
+The repo is public: no host names, private or tailnet addresses, or mDNS names, in code, docs or tests. Name machines by role (the fleet server, the test box, a workstation); examples use `192.0.2.x` and `example.invalid`. Host config lives outside the repo in `~/.config/blinky/` (keys in blinky_time's CLAUDE.md). `scripts/check_topology.py` runs in CI; a justified exception goes in `.topology-allowlist` with its reason.

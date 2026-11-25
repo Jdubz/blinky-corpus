@@ -6,6 +6,14 @@ on:
     branches: [main]
 
 jobs:
+  topology:
+    name: Topology check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: No host names or private addresses (the repo is public)
+      run: python3 scripts/check_topology.py
+
   scoring:
     name: Scoring tests
     runs-on: ubuntu-latest
