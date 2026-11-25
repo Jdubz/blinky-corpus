@@ -4,7 +4,7 @@ Critical rules only. What the corpus is and how it's consumed: `README.md`. The 
 
 ## Changes reach consumers only through a pin bump
 
-blinky-firmware (its corpus regression gate) and blinky_time (blinky-server's validation suite, ml-training) pin this repo as their `corpus/` submodule. A merge to `main` changes nothing for them until Dependabot opens a bump PR in each, and that PR's CI passes. A change that breaks a consumer shows up on the bump PR, so changes that a consumer must adopt in step (a renamed function, a new label file it requires) need a paired PR there.
+blinky-firmware (its corpus regression gate) and blinky_time (blinky-server's validation suite, ml-training) pin this repo as their `corpus/` submodule. A merge to `main` changes nothing for them until a PR bumps their `corpus` pin (an ordinary PR, not Dependabot) and its CI passes. A change that breaks a consumer shows up on the bump PR, so changes that a consumer must adopt in step (a renamed function, a new label file it requires) need a paired PR there.
 
 PRs go to `main` with CI green and the review addressed.
 
