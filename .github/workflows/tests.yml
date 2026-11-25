@@ -27,3 +27,5 @@ jobs:
         echo "$(ls edm/*.mp3 | wc -l) tracks, all labelled"
     - name: Tests
       run: python -m pytest -v tests/
+    - name: Drum reviewer page (JS syntax, no external fetches)
+      run: python tools/drum-reviewer/check_js.py
