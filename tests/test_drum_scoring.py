@@ -189,11 +189,14 @@ def test_device_runs_report_drums() -> None:
         duration=7000.0,
         start_time=start,
         transients=[
-            TransientEvent(timestamp_ms=start + t * 1000 + 30, type="onset", strength=1.0)
+            # 300 ms after the labels: a box run's playback start + speaker + mic + detection.
+            TransientEvent(timestamp_ms=start + t * 1000 + 300, type="onset", strength=1.0)
             for t in KICKS
         ],
     )
     summary = format_score_summary(score_device_run(data, start, gt))
     assert summary["drums"]["kickR50"] == 1.0 and summary["drums"]["snareR50"] == 0.0
+    assert summary["drums"]["lagSource"] == "estimated"
+    assert abs(summary["drums"]["lagMs"] - 300) < 5 and not summary["drums"]["lagAmbiguous"]
     no_drums = GroundTruth(pattern="t", duration_ms=7000, hits=gt.hits)
     assert format_score_summary(score_device_run(data, start, no_drums))["drums"] is None
