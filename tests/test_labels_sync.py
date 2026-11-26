@@ -107,7 +107,8 @@ class FakeGh:
             return json.dumps(self.prs)
         if a[:2] == ("pr", "create"):
             n = 40 + len(self.calls)
-            self.prs.append({"headRefName": a[a.index("--head") + 1], "number": n})
+            self.prs.append({"headRefName": a[a.index("--head") + 1], "number": n, "isCrossRepository": False,
+                             "author": {"login": "app/github-actions"}})
             return f"https://github.com/o/c/pull/{n}\n"
         return ""
 
@@ -151,3 +152,17 @@ def test_dry_run_pushes_nothing(repo):
     out = sync.publish(repo, {A: label(repo, "a", kicks=KICKS[:-1])}, gh, gitrun, dry_run=True)
     assert out.startswith("would push") and not any(c[:2] == ("workflow", "run") for c in gh.calls)
     assert "labels/" not in git(repo, "ls-remote", "origin")
+
+
+def test_a_fork_pr_never_counts_as_the_batch(repo):
+    """Anyone can open a PR from a fork branch named labels/auto-*: it must not be picked up (the
+    sync would otherwise turn on auto-merge for it)."""
+    fork = {"headRefName": "labels/auto-20260101-000000-dead", "number": 1, "isCrossRepository": True,
+            "author": {"login": "app/github-actions"}}
+    human_pr = {"headRefName": "labels/auto-20260101-000000-beef", "number": 2, "isCrossRepository": False,
+                "author": {"login": "someone"}}
+    gh = FakeGh([fork, human_pr])
+    out = sync.publish(repo, {A: label(repo, "a", kicks=KICKS[:-1])}, gh, gitrun)
+    assert "dead" not in out and "beef" not in out and out.startswith("pushed 1 file(s) to labels/auto-")
+    merges = [c for c in gh.calls if c[:2] == ("pr", "merge")]
+    assert merges and all(c[2] not in ("1", "2") for c in merges)

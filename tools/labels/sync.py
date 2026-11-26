@@ -111,11 +111,17 @@ def validate(export: Any, repo: Path, seeds_file: Path | None = None) -> tuple[b
     return ready, good, problems
 
 
+BATCH_AUTHOR = "app/github-actions"  # this workflow's GITHUB_TOKEN opens the batches
+
+
 def open_batch(gh: Run, repo: Path) -> tuple[str, int] | None:
-    """The open labels/auto-* PR (branch, number), if any."""
-    prs = json.loads(gh("pr", "list", "--state", "open", "--base", "main", "--json", "headRefName,number",
-                        "--limit", "50", cwd=repo) or "[]")
-    mine = [(p["headRefName"], p["number"]) for p in prs if p["headRefName"].startswith(BRANCH_PREFIX)]
+    """The open batch (branch, number), if any: a PR this workflow opened, from a labels/auto-* branch
+    of this repo. A fork's PR with the same branch name (anyone can open one) never counts."""
+    prs = json.loads(gh("pr", "list", "--state", "open", "--base", "main", "--json",
+                        "headRefName,number,isCrossRepository,author", "--limit", "50", cwd=repo) or "[]")
+    mine = [(p["headRefName"], p["number"]) for p in prs
+            if p["headRefName"].startswith(BRANCH_PREFIX) and p.get("isCrossRepository") is False
+            and (p.get("author") or {}).get("login") == BATCH_AUTHOR]
     return sorted(mine, key=lambda x: x[1])[0] if mine else None
 
 
