@@ -12,7 +12,9 @@ drums_human/.drafts/, which is newer), compares mix-level ADTOF with the human l
   reports how many of those each set finds (a recall-only view).
 
 It also reports what share of the corrections each suspect tier (edm/drums_suspect/) covers,
-against that tier's share of the track. Read-only; standard library only.
+against that tier's share of the track, and how many of the hits the human added (ADTOF's misses)
+have a same-class expected-hit marker (the suspect map's per-bar `expected`, schema 2) within
++-30 ms. Read-only; standard library only.
 
     python scripts/drum_suspect_eval.py [--edm edm] [--human DIR]
 """
@@ -121,6 +123,18 @@ def main() -> int:
             n = sum(tier(t) in tiers for t in errs)
             share = sum(r["end"] - r["start"] for r in sus["ranges"] if r["tier"] in tiers) / sus["duration"]
             print(f"  suspect {name:12s} covers {n}/{len(errs)} corrections in {100 * share:.0f}% of the track")
+        expected = [e for b in sus["bars"] for e in b.get("expected", [])]
+        if expected:
+            missed = []  # the human's hits that mix ADTOF has no match for (in reviewed ranges, if any)
+            for c in CLASSES:
+                ref = [t for t in hum[c] if not rev or inr(t)]
+                mr = {r for r, _ in match(mix[c], ref, 0.050)}
+                missed += [(t, c) for t in ref if t not in mr]
+            near = [min((abs(e["time"] - t) for e in expected if e["type"] == c), default=None) for t, c in missed]
+            n30 = [d for d in near if d is not None and d <= 0.030]
+            print(f"  expected-hit markers: {len(n30)}/{len(missed)} missed hits within +-30 ms of one "
+                  f"(+-10 ms: {sum(d <= 0.010 for d in n30)}); {len(expected)} markers in the track, "
+                  f"{sum(e['at'] == 'attack' for e in expected)} placed at a measured attack")
     return 0
 
 

@@ -32,6 +32,13 @@ against the bars around it:
    - filter: the drum stem's per-bar log spectral centroid or 85% rolloff, level or slope, more
      than 3 robust SDs from the track's median.
 
+5. Per bar, `expected`: each missing_c slot as a hit the reviewer can offer, {"time", "type", "p"
+   (P_c), "attack" (the slot's attack strength), "at"}. The time is the strongest 150 Hz-5 kHz
+   onset-strength peak of the mix or the drum stem within +-min(20 ms, 0.4 slot) of the slot, when
+   that peak is a local maximum at least as strong as the attack threshold ("at": "attack"),
+   otherwise the grid time ("at": "grid"). That band is the transient both drums share and the one
+   the reviewer snaps to. Hints only: never ground truth, never published as labels (schema 2).
+
 score = disagree + sum(P over missing slots) + 0.05 * unexpected + 0.05 * filter.
 On the one reviewed track, disagreement and the pattern's missing hits each localised the
 owner's corrections about equally well, and they come from independent evidence. The
@@ -61,7 +68,11 @@ GRID_TOL_S = 0.012
 FILTER_KEYS = ("centroid_drums", "rolloff_drums")
 TIERS = (("high", 0.20), ("medium", 0.40))
 CLASSES = ("kick", "snare")
-SCHEMA = 1
+SCHEMA = 2
+# The onset-strength bands an expected hit's attack is looked for in: the 150 Hz-5 kHz transient of
+# the mix and the drum stem, for both classes (a kick's 30-150 Hz energy peaks a few ms after its
+# attack; the reviewer snaps to the same band).
+PEAK_BANDS = (("mid", "mix"), ("mid", "drums"))
 
 
 # --- grid ---------------------------------------------------------------------------------
@@ -134,6 +145,24 @@ def _occupancy(times, origin, s, nbars, first_bar):
     return occ
 
 
+def _attack_peak(x: np.ndarray, tc: float, w: float, hop: float, thr: float) -> float | None:
+    """The time of the strongest onset-strength peak of `x` within +-w of tc, or None when there's
+    no local maximum there at least `thr` strong (the window's edge rising into a neighbour's attack
+    doesn't count). Frame i covers [i, i+1) * hop, so its peak is at (i + 0.5) * hop, as the
+    reviewer's snapping puts it, refined by a parabola through the peak and its two neighbours."""
+    i0, i1 = max(1, int(np.ceil((tc - w) / hop - 0.5))), min(len(x) - 2, int(np.floor((tc + w) / hop - 0.5)))
+    if i1 < i0:
+        return None
+    seg = x[i0:i1 + 1].astype(np.float64)
+    i = int(np.argmax(seg)) + i0
+    a, b, c = float(x[i - 1]), float(x[i]), float(x[i + 1])
+    if b < thr or not (b >= a and b > c):
+        return None
+    den = a - 2 * b + c
+    off = min(0.5, max(-0.5, 0.5 * (a - c) / den)) if den < 0 else 0.0
+    return (i + 0.5 + off) * hop
+
+
 def _robust_z(x: np.ndarray) -> np.ndarray:
     med = np.nanmedian(x)
     mad = np.nanmedian(np.abs(x - med)) * 1.4826
@@ -166,13 +195,15 @@ def analyse(mix: dict, stem: dict, feats, duration: float, tempo_hint: float | N
     lab = {src: {c: _occupancy(d[c], origin, s, nb, fb) for c in CLASSES} for src, d in (("mix", mix), ("stem", stem))}
 
     # Attacks: the strongest kick/snare-band onset strength within +-min(20 ms, 0.4 slot).
-    bands = []
+    bands = {}
     for band in ("low", "mid"):
         for src in ("mix", "drums"):
             x = np.asarray(feats[f"os_{band}_{src}"], dtype=np.float32)
-            bands.append(x / (np.percentile(x, 99.5) or 1.0))
-    n = min(len(x) for x in bands)
-    att_all = np.max(np.vstack([x[:n] for x in bands]), axis=0)
+            bands[(band, src)] = x / (np.percentile(x, 99.5) or 1.0)
+    n = min(len(x) for x in bands.values())
+    att_all = np.max(np.vstack([x[:n] for x in bands.values()]), axis=0)
+    # Where an expected hit's attack is: the transient band of the mix and the stem (PEAK_BANDS).
+    att_peak = np.max(np.vstack([bands[k][:n] for k in PEAK_BANDS]), axis=0)
     hop = float(feats["os_hop_s"][0])  # 44 samples at 44.1 kHz: 0.9977 ms, not 1 ms
     w = min(0.020, 0.4 * s)
     att = np.zeros((nb, SLOTS))
@@ -217,10 +248,17 @@ def analyse(mix: dict, stem: dict, feats, duration: float, tempo_hint: float | N
         row = {"bar": b, "start": round(max(0.0, bar_start(b)), 4), "end": min(duration, round(bar_start(b + 1), 4))}
         miss_w = 0.0
         ext_n = 0
+        expected: list[dict] = []
         for c in CLASSES:
             P = union[c][cw].mean(0) if len(cw) >= 4 else gpat[c]
             miss = (P >= 0.5) & ~lab["mix"][c][b] & (att[b] >= att_thr)
             extra = (P <= 0.1) & lab["mix"][c][b]
+            for sl in np.where(miss)[0]:
+                tg = slot_time(b, sl)
+                tp = _attack_peak(att_peak, tg, w, hop, att_thr)
+                expected.append({"time": round(tp if tp is not None else tg, 4), "type": c,
+                                 "p": round(float(P[sl]), 2), "attack": round(float(att[b, sl]), 3),
+                                 "at": "attack" if tp is not None else "grid"})
             row[f"missing_{c}"] = int(miss.sum())
             row[f"unexpected_{c}"] = int(extra.sum())
             miss_w += float(P[miss].sum())
@@ -229,6 +267,7 @@ def analyse(mix: dict, stem: dict, feats, duration: float, tempo_hint: float | N
         row["filter"] = bool(filt[b])
         row["filter_z"] = round(float(fz[b]), 2)
         row["score"] = round(row["disagree"] + miss_w + 0.05 * ext_n + (0.05 if row["filter"] else 0.0), 3)
+        row["expected"] = sorted((e for e in expected if 0 <= e["time"] <= duration), key=lambda e: e["time"])
         if row["end"] > row["start"]:
             bars.append(row)
     grid = {"bpm": round(60.0 / g["T"], 4), "beat_s": round(g["T"], 6), "origin_s": round(origin, 4),

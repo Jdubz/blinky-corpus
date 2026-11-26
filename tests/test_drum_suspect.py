@@ -65,6 +65,37 @@ def test_filtered_section_is_high_tier_and_clean_bars_are_not():
     assert all(b["score"] == 0 and b["tier"] is None for b in bars if not in_gap(b))
     rs = ds.ranges_from(bars)
     assert rs[0]["tier"] == "high" and rs[0]["bars"] == 4 and rs[0]["disagree"] == 8
+    # The two missing snares of each gap bar are offered at their attacks; no other bar offers any.
+    snares = [0.5 + (4 * b + q) * BEAT for b in range(10, 14) for q in (1, 3)]
+    ex = [e for b in gap for e in b["expected"]]
+    assert [e["type"] for e in ex] == ["snare"] * 8 and all(e["at"] == "attack" for e in ex)
+    assert all(abs(e["time"] - t) < 0.0015 for e, t in zip(ex, snares))
+    assert all(e["p"] == 1.0 and e["attack"] >= grid["attack_threshold"] for e in ex)
+    assert not any(b["expected"] for b in bars if not in_gap(b))
+
+
+def test_expected_hit_without_a_transient_peak_sits_on_the_grid():
+    """A missing snare whose only attack is in the kick band has no 150 Hz-5 kHz peak to sit on."""
+    mix, stem, feats = _track(snare_gap=range(10, 11))
+    hop = float(feats["os_hop_s"][0])
+    gap = [0.5 + (4 * 10 + q) * BEAT for q in (1, 3)]
+    for t in gap:
+        for src in ("mix", "drums"):
+            feats[f"os_mid_{src}"][int(round(t / hop))] = 0.0
+    grid, bars = ds.analyse(mix, stem, feats, DUR, float(feats["tempo_librosa"][0]))
+    ex = [e for b in bars for e in b["expected"]]
+    assert [e["at"] for e in ex] == ["grid", "grid"]
+    assert all(abs(e["time"] - t) < 0.002 for e, t in zip(ex, gap))  # the fitted grid's slot time
+
+
+def test_attack_peak_needs_a_local_maximum_above_the_threshold():
+    hop = 0.001
+    x = np.zeros(200, np.float32)
+    x[100] = 1.0
+    assert ds._attack_peak(x, 0.1, 0.02, hop, 0.5) == pytest.approx(0.1005)
+    assert ds._attack_peak(x, 0.1, 0.02, hop, 1.5) is None  # too weak
+    x2 = np.linspace(0, 1, 200).astype(np.float32)  # rising into the window's edge: no peak
+    assert ds._attack_peak(x2, 0.1, 0.02, hop, 0.1) is None
 
 
 def test_corpus_files_are_well_formed():
@@ -77,9 +108,18 @@ def test_corpus_files_are_well_formed():
         if f.name == "PROVENANCE.json":
             continue
         d = json.loads(f.read_text())
-        assert d["schema"] == 1 and d["track"] == f.stem
+        assert d["schema"] == 2 and d["track"] == f.stem
         assert d["duration"] == pytest.approx(manifest[f.stem]["duration"])
         for r in d["ranges"]:
             assert 0 <= r["start"] < r["end"] <= d["duration"] + 1e-6 and r["tier"] in ("high", "medium", "low")
         starts = [b["start"] for b in d["bars"]]
         assert starts == sorted(starts)
+        for b in d["bars"]:
+            ex = b["expected"]
+            assert len(ex) == b["missing_kick"] + b["missing_snare"]
+            assert [e["time"] for e in ex] == sorted(e["time"] for e in ex)
+            for e in ex:
+                assert e["type"] in ("kick", "snare") and e["at"] in ("attack", "grid")
+                assert 0 <= e["time"] <= d["duration"] and 0.5 <= e["p"] <= 1.0
+                # within the bar, give or take the attack window at its edges
+                assert b["start"] - 0.025 <= e["time"] <= b["end"] + 0.025
