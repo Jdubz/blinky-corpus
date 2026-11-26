@@ -177,3 +177,66 @@ def test_a_fork_pr_never_counts_as_the_batch(repo):
     assert "dead" not in out and "beef" not in out and out.startswith("pushed 1 file(s) to labels/auto-")
     merges = [c for c in gh.calls if c[:2] == ("pr", "merge")]
     assert merges and all(c[2] not in ("1", "2") for c in merges)
+
+
+def held(run_id, branch, sha, **over):
+    r = {"id": run_id, "name": "Tests", "event": "pull_request", "status": "completed",
+         "conclusion": "action_required", "head_branch": branch, "head_sha": sha,
+         "actor": {"login": "github-actions[bot]"}, "triggering_actor": {"login": "github-actions[bot]"},
+         "repository": {"full_name": "o/c"}, "head_repository": {"full_name": "o/c"}}
+    r.update(over)
+    return r
+
+
+class RunsGh(FakeGh):
+    def __init__(self, runs, prs=()):
+        super().__init__(prs)
+        self.runs = runs
+
+    def __call__(self, *a, cwd):
+        if a[:1] == ("api",) and "GET" in a:
+            self.calls.append(a)
+            return json.dumps({"workflow_runs": self.runs})
+        return super().__call__(*a, cwd=cwd)
+
+
+def test_only_the_batchs_own_held_runs_are_approved(repo):
+    out = sync.publish(repo, {A: label(repo, "a", kicks=KICKS[:-1])}, FakeGh(), gitrun)
+    branch = out.split(" to ")[1].split(" ")[0]
+    tip = git(repo, "rev-parse", f"origin/{branch}").strip()
+    runs = [
+        held(1, branch, tip),
+        held(2, branch, tip, head_repository={"full_name": "evil/c"}),  # a fork's run
+        held(3, branch, "0" * 40),  # an older commit than the branch's tip
+        held(4, branch, tip, actor={"login": "someone"}, triggering_actor={"login": "someone"}),
+        held(5, "labels/auto-other", tip),
+        held(6, branch, tip, event="pull_request_target"),
+    ]
+    gh = RunsGh(runs)
+    got = sync.approve_held_runs(gh, gitrun, repo, branch)
+    posts = [c for c in gh.calls if c[:3] == ("api", "-X", "POST")]
+    assert got == ["Tests (1)"]
+    assert posts == [("api", "-X", "POST", "repos/{owner}/{repo}/actions/runs/1/approve")]
+
+
+def test_no_held_runs_approves_nothing(repo):
+    out = sync.publish(repo, {A: label(repo, "a", kicks=KICKS[:-1])}, FakeGh(), gitrun)
+    branch = out.split(" to ")[1].split(" ")[0]
+    gh = RunsGh([])
+    assert sync.approve_held_runs(gh, gitrun, repo, branch) == []
+    assert not any(c[:3] == ("api", "-X", "POST") for c in gh.calls)
+
+
+def test_a_refused_approval_still_publishes_then_fails_the_run(repo, monkeypatch):
+    """The approve call failing (e.g. GITHUB_TOKEN refused) must not stop new edits being published."""
+    published = []
+    monkeypatch.setattr(sync, "open_batch", lambda gh, repo: ("labels/auto-x", 7))
+
+    def refused(*a, **k):
+        raise RuntimeError("gh api: HTTP 403")
+
+    monkeypatch.setattr(sync, "approve_held_runs", refused)
+    monkeypatch.setattr(sync, "publish_from_export", lambda args, repo, gh, git: published.append(1) or 0)
+    monkeypatch.setattr(sync, "run", lambda *a, **k: "")
+    assert sync.main(["--api", "https://example.invalid", "--repo", str(repo)]) == 1
+    assert published == [1]
