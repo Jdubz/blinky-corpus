@@ -32,9 +32,10 @@ against the bars around it:
    - filter: the drum stem's per-bar log spectral centroid or 85% rolloff, level or slope, more
      than 3 robust SDs from the track's median.
 
-score = disagree + 0.1 * sum(P over missing slots) + 0.05 * unexpected + 0.05 * filter.
-On the one reviewed track, mix/stem disagreement localised the owner's corrections far better
-than the pattern or filter evidence (see PROVENANCE.json), so those two only break ties.
+score = disagree + sum(P over missing slots) + 0.05 * unexpected + 0.05 * filter.
+On the one reviewed track, disagreement and the pattern's missing hits each localised the
+owner's corrections about equally well, and they come from independent evidence. The
+unexpected-hit and filter evidence was weak, so those two only break ties (see PROVENANCE.json).
 
 Bars are ranked by score. `tier` is "high" for the top-scoring bars covering 20% of the track,
 "medium" for the next 20%, and "low" for any other bar with a non-zero score. Ranges merge
@@ -42,7 +43,8 @@ consecutive bars of the same tier.
 
     python scripts/drum_suspect.py --features DIR [--edm edm] [--out edm/drums_suspect]
 
-DIR holds <stem>.npz from scripts/drum_suspect_features.py (run on the Spark as a gpu_task).
+DIR holds <stem>.npz from scripts/drum_suspect_features.py (run on the Spark as a gpu_task), which
+records the envelopes' hop as `os_hop_s`.
 Needs numpy.
 """
 from __future__ import annotations
@@ -170,13 +172,14 @@ def analyse(mix: dict, stem: dict, feats, duration: float, tempo_hint: float | N
             x = np.asarray(feats[f"os_{band}_{src}"], dtype=np.float32)
             bands.append(x / (np.percentile(x, 99.5) or 1.0))
     n = min(len(x) for x in bands)
-    att_all = np.max(np.vstack([x[:n] for x in bands]), axis=0)  # 1 ms hop
+    att_all = np.max(np.vstack([x[:n] for x in bands]), axis=0)
+    hop = float(feats["os_hop_s"][0])  # 44 samples at 44.1 kHz: 0.9977 ms, not 1 ms
     w = min(0.020, 0.4 * s)
     att = np.zeros((nb, SLOTS))
     for b in range(nb):
         for sl in range(SLOTS):
             tc = slot_time(b, sl)
-            i0, i1 = max(0, int((tc - w) * 1000)), min(n, int((tc + w) * 1000) + 1)
+            i0, i1 = max(0, int((tc - w) / hop)), min(n, int((tc + w) / hop) + 1)
             if i1 > i0:
                 att[b, sl] = att_all[i0:i1].max()
 
@@ -225,7 +228,7 @@ def analyse(mix: dict, stem: dict, feats, duration: float, tempo_hint: float | N
         row["disagree"] = int(dis[b])
         row["filter"] = bool(filt[b])
         row["filter_z"] = round(float(fz[b]), 2)
-        row["score"] = round(row["disagree"] + 0.1 * miss_w + 0.05 * ext_n + (0.05 if row["filter"] else 0.0), 3)
+        row["score"] = round(row["disagree"] + miss_w + 0.05 * ext_n + (0.05 if row["filter"] else 0.0), 3)
         if row["end"] > row["start"]:
             bars.append(row)
     grid = {"bpm": round(60.0 / g["T"], 4), "beat_s": round(g["T"], 6), "origin_s": round(origin, 4),

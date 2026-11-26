@@ -8,7 +8,9 @@ Per track, into SPARK_OUTPUT_FEATS/<track>.npz:
   rms_mix, rms_drums                                         RMS, 10 ms hop
   os_{low,mid,high}_{mix,drums}  reviewer-style band onset strength (zero-phase Butterworth band,
                                  1 ms RMS blocks, log1p(100x) of the 99.9th-pct-normalised envelope,
-                                 positive centred slope), 1 ms hop, float16
+                                 positive centred slope), hop SR // 1000 samples (44 at 44.1 kHz,
+                                 0.9977 ms: frame i is at i * os_hop_s, NOT i ms), float16
+  os_hop_s                       that hop in seconds
   tempo_librosa, beats_librosa   librosa.feature.tempo / beat_track (Ellis 2007) on the drum stem
 """
 import json, os, sys, tarfile, signal
@@ -67,6 +69,7 @@ def main():
                 feats[f"os_{b}_{tag}"] = band_os(y, lo, hi, 10 if b == "low" else 1)
         oenv = librosa.onset.onset_strength(y=drums, sr=SR, hop_length=441)
         tempo, beats = librosa.beat.beat_track(onset_envelope=oenv, sr=SR, hop_length=441, units="time")
+        feats["os_hop_s"] = np.array([(SR // 1000) / SR], np.float64)
         feats["tempo_librosa"] = np.atleast_1d(np.asarray(tempo, dtype=np.float32))
         feats["beats_librosa"] = np.asarray(beats, dtype=np.float32)
         np.savez_compressed(out / f"{name}.npz", **feats)

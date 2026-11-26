@@ -28,11 +28,13 @@ def _track(snare_gap=range(0, 0)):
     mix_sn = [t for t in snares if int((t - 0.5) / (4 * BEAT)) not in snare_gap]
     mix = {"kick": kicks, "snare": mix_sn}
     stem = {"kick": kicks, "snare": snares}
-    n = int(DUR * 1000)
+    hop = 44 / 44100  # the features script's real hop: 0.9977 ms, so frame i is NOT i ms
+    n = int(DUR / hop)
     feats = {f"os_{b}_{s}": np.zeros(n, np.float32) for b in ("low", "mid", "high") for s in ("mix", "drums")}
     for t in kicks + snares:
         for k in feats:
-            feats[k][int(t * 1000)] = 1.0
+            feats[k][int(round(t / hop))] = 1.0
+    feats["os_hop_s"] = np.array([hop])
     m = int(DUR * 100)
     for k in ("centroid_drums", "rolloff_drums", "centroid_mix", "rolloff_mix"):
         feats[k] = np.full(m, 2000.0, np.float32)  # no filter anywhere
@@ -57,6 +59,9 @@ def test_filtered_section_is_high_tier_and_clean_bars_are_not():
     gap = [b for b in bars if in_gap(b)]
     assert len(gap) == 4
     assert all(b["tier"] == "high" and b["disagree"] == 2 and b["missing_snare"] == 2 for b in gap)
+    # late in the track too: a ms-indexed envelope would have drifted ~70 ms off its slots by here
+    late = [b for b in bars if b["start"] > 50]
+    assert late and grid["attack_threshold"] == 1.0
     assert all(b["score"] == 0 and b["tier"] is None for b in bars if not in_gap(b))
     rs = ds.ranges_from(bars)
     assert rs[0]["tier"] == "high" and rs[0]["bars"] == 4 and rs[0]["disagree"] == 8
