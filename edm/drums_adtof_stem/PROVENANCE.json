@@ -1,0 +1,299 @@
+{
+  "purpose": "REFERENCE ONLY: ghost ticks in tools/drum-reviewer (Settings > Reference ticks). Not ground truth, not a seed; the scorer never reads it.",
+  "why": "On dnb-energetic-breakbeat ADTOF on the full mix missed 27 snares the owner added by hand (it classed 26 of them hi-hat); on the drum stem it finds 22 of the 27. See the PR for the measurement.",
+  "generator": {
+    "algorithm": "adtof_frame_rnn_on_htdemucs_drums",
+    "version": 1,
+    "params": {
+      "separation": {
+        "engine": "Spark job API `separate`",
+        "model_type": "htdemucs",
+        "package": "demucs==4.0.1",
+        "stems": [
+          "drums"
+        ],
+        "chunk_seconds": 7.8
+      },
+      "transcription": {
+        "engine": "Spark job API `transcribe`, engine adtof",
+        "engine_version": "adtof-pytorch@85c192e7",
+        "package": "adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",
+        "thresholds": [
+          0.22,
+          0.24,
+          0.32,
+          0.22,
+          0.3
+        ],
+        "fps": 100
+      },
+      "classes": [
+        "kick",
+        "snare",
+        "hihat"
+      ],
+      "weights": {
+        "kick": 1.0,
+        "snare": 1.0,
+        "hihat": 0.0
+      }
+    },
+    "attribution": "ADTOF, Zehren et al. (github.com/MZehren/ADTOF), CC BY-NC-SA 4.0; HT-Demucs, Rouard, Massa, Defossez (github.com/facebookresearch/demucs), MIT"
+  },
+  "corpus_commit": "4effae3c5b159af871b7d553bc838e6a07037ced",
+  "created": "2026-11-25",
+  "tracks": {
+    "afrobeat-feelgood-groove": {
+      "audio_sha256": "fe19fce9b4374f05eb53d090bb4d38a875c43a6d5f52fc5ee778be609c5009cd",
+      "separate_job": "187b0ee1f8cd48c488082cac4e0c825c",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/187b0ee1f8cd48c488082cac4e0c825c/drums.wav",
+      "transcribe_job": "079be5fe162e4a29befa15a9ade9718d",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/079be5fe162e4a29befa15a9ade9718d/events.json",
+      "peak_activation": {
+        "kick": 0.91178,
+        "snare": 0.87563,
+        "tom": 0.77139,
+        "hihat": 0.82457,
+        "cymbal": 0.84161
+      }
+    },
+    "amapiano-vibez": {
+      "audio_sha256": "470a3bb78e6214e5421d3075bc19fac1e6717c64563a7c59270017aad4b152ed",
+      "separate_job": "7a671865d3e44f7da2ca6b6ee476c694",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/7a671865d3e44f7da2ca6b6ee476c694/drums.wav",
+      "transcribe_job": "0e6a6095a1c34154aa89b45b1ba977f5",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/0e6a6095a1c34154aa89b45b1ba977f5/events.json",
+      "peak_activation": {
+        "kick": 0.87287,
+        "snare": 0.90873,
+        "tom": 0.72867,
+        "hihat": 0.77062,
+        "cymbal": 0.27526
+      }
+    },
+    "breakbeat-background": {
+      "audio_sha256": "23f54589cf7b781d07b20503b144b5862ccd07a36e01e28c7f6608aaf9aa7a59",
+      "separate_job": "139fa2c5f25b4f68bf5f6943334bfa5a",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/139fa2c5f25b4f68bf5f6943334bfa5a/drums.wav",
+      "transcribe_job": "6e1e2f260a3442268fc8a1def3231d5f",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/6e1e2f260a3442268fc8a1def3231d5f/events.json",
+      "peak_activation": {
+        "kick": 0.90564,
+        "snare": 0.88761,
+        "tom": 0.63124,
+        "hihat": 0.88285,
+        "cymbal": 0.80991
+      }
+    },
+    "breakbeat-drive": {
+      "audio_sha256": "089d5a0d970a1e5b70f417352a786c0f5a53e58a8f1699b37576505a7380dd62",
+      "separate_job": "254ac738cc094c28b19c3b8a516a1598",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/254ac738cc094c28b19c3b8a516a1598/drums.wav",
+      "transcribe_job": "4e730bf7983b4247a7d3b25df9e34277",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/4e730bf7983b4247a7d3b25df9e34277/events.json",
+      "peak_activation": {
+        "kick": 0.8889,
+        "snare": 0.90321,
+        "tom": 0.83959,
+        "hihat": 0.62233,
+        "cymbal": 0.19931
+      }
+    },
+    "dnb-energetic-breakbeat": {
+      "audio_sha256": "daf9c5cef4faa5da2d10750cdbb6bbb704a9a26e1e15ad7fc33790549a73cc89",
+      "separate_job": "bb8fe2d1d5494985ad6eb6574d9812b8",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/bb8fe2d1d5494985ad6eb6574d9812b8/drums.wav",
+      "transcribe_job": "190dbd57e320453e978935a81d2fc66c",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/190dbd57e320453e978935a81d2fc66c/events.json",
+      "peak_activation": {
+        "kick": 0.92648,
+        "snare": 0.91224,
+        "tom": 0.13453,
+        "hihat": 0.87016,
+        "cymbal": 0.75673
+      }
+    },
+    "dnb-liquid-jungle": {
+      "audio_sha256": "530fc7ffcccdbba146c4aae4642aacc07609b0d316e5a8c0baffefee282c4dfd",
+      "separate_job": "05088e5fefa64c04825c99d6fabe9975",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/05088e5fefa64c04825c99d6fabe9975/drums.wav",
+      "transcribe_job": "8e8350f52a534bd0b1eafab96e9e3875",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/8e8350f52a534bd0b1eafab96e9e3875/events.json",
+      "peak_activation": {
+        "kick": 0.8943,
+        "snare": 0.69127,
+        "tom": 0.25411,
+        "hihat": 0.8375,
+        "cymbal": 0.04563
+      }
+    },
+    "dubstep-edm-halftime": {
+      "audio_sha256": "2877b1c0a77047abb158031bea151954afee243fad44e740d62e39935abda24e",
+      "separate_job": "c3bee978f4714b7283ce78fffb3648ff",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/c3bee978f4714b7283ce78fffb3648ff/drums.wav",
+      "transcribe_job": "730454296f384429970beb7efb128adc",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/730454296f384429970beb7efb128adc/events.json",
+      "peak_activation": {
+        "kick": 0.90141,
+        "snare": 0.87274,
+        "tom": 0.12708,
+        "hihat": 0.88497,
+        "cymbal": 0.44629
+      }
+    },
+    "edm-trap-electro": {
+      "audio_sha256": "7c82480484f0e689bf7a3ef98c4eeef7e7502ef8bc3684363f2433a9b1c2e916",
+      "separate_job": "6017218ff1794b3da118ec3d239ee031",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/6017218ff1794b3da118ec3d239ee031/drums.wav",
+      "transcribe_job": "48b863071a124c3da0babed4fe8ae1b3",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/48b863071a124c3da0babed4fe8ae1b3/events.json",
+      "peak_activation": {
+        "kick": 0.90307,
+        "snare": 0.87897,
+        "tom": 0.36957,
+        "hihat": 0.84949,
+        "cymbal": 0.61758
+      }
+    },
+    "garage-uk-2step": {
+      "audio_sha256": "f6da120f267d7d69467ab9414b5593f0fe3e3c375e09e6e766acf1a04555a70e",
+      "separate_job": "9a96c6bfa96c4bdfbec1ad1121947894",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/9a96c6bfa96c4bdfbec1ad1121947894/drums.wav",
+      "transcribe_job": "3c5e25de9d0149adb0a25499a2085a46",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/3c5e25de9d0149adb0a25499a2085a46/events.json",
+      "peak_activation": {
+        "kick": 0.91156,
+        "snare": 0.88648,
+        "tom": 0.20863,
+        "hihat": 0.90517,
+        "cymbal": 0.09353
+      }
+    },
+    "reggaeton-fuego-lento": {
+      "audio_sha256": "8086adf07df87b59b70e07c85e3bfffac4b395a2b86f618fcfbac45e6cf203c3",
+      "separate_job": "3797ec1a2dc4459abbb9e46f6a32a48c",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/3797ec1a2dc4459abbb9e46f6a32a48c/drums.wav",
+      "transcribe_job": "d6101b311ad346c6a313e43d587582d0",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/d6101b311ad346c6a313e43d587582d0/events.json",
+      "peak_activation": {
+        "kick": 0.8826,
+        "snare": 0.82375,
+        "tom": 0.74396,
+        "hihat": 0.73388,
+        "cymbal": 0.05351
+      }
+    },
+    "techno-deep-ambience": {
+      "audio_sha256": "b873f8373c4d1cf134f358105ff5914e601d60dd518a7a5c0ad04398f47c0fad",
+      "separate_job": "ac429e18ad804d1286ba9d0da3f2ba75",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/ac429e18ad804d1286ba9d0da3f2ba75/drums.wav",
+      "transcribe_job": "2f1b7ae8d92a441ca2610df7ceffd0e2",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/2f1b7ae8d92a441ca2610df7ceffd0e2/events.json",
+      "peak_activation": {
+        "kick": 0.91954,
+        "snare": 0.77328,
+        "tom": 0.29468,
+        "hihat": 0.8928,
+        "cymbal": 0.84042
+      }
+    },
+    "techno-dub-groove": {
+      "audio_sha256": "6c0ce7af5afa2e983340d74cda85e93b18a62d1af99ee5f2ebb42a5f7348a536",
+      "separate_job": "fdc96e826e754264be0c1c629d1262fd",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/fdc96e826e754264be0c1c629d1262fd/drums.wav",
+      "transcribe_job": "b36e0c5abe004990bb553b2da20bb0fe",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/b36e0c5abe004990bb553b2da20bb0fe/events.json",
+      "peak_activation": {
+        "kick": 0.90418,
+        "snare": 0.75974,
+        "tom": 0.37405,
+        "hihat": 0.87806,
+        "cymbal": 0.81398
+      }
+    },
+    "techno-machine-drum": {
+      "audio_sha256": "f7779a31b563063a84aaad5f9b1cb15ef39b56e62ccd3c5852d1ca556802e25f",
+      "separate_job": "c7985d2b762840da917e89c7b3be393b",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/c7985d2b762840da917e89c7b3be393b/drums.wav",
+      "transcribe_job": "86378c8c3d804b808dc02c9f9e41db70",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/86378c8c3d804b808dc02c9f9e41db70/events.json",
+      "peak_activation": {
+        "kick": 0.89978,
+        "snare": 0.89158,
+        "tom": 0.08852,
+        "hihat": 0.89742,
+        "cymbal": 0.40779
+      }
+    },
+    "techno-minimal-01": {
+      "audio_sha256": "ba1c747e0e1ade47d474f3407985c74cac4671bf3e21805c25c2f8545ac74c2a",
+      "separate_job": "8346add98f624df596fd0c0155231103",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/8346add98f624df596fd0c0155231103/drums.wav",
+      "transcribe_job": "fb8830e7dfee446297c7ab34d1d7d089",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/fb8830e7dfee446297c7ab34d1d7d089/events.json",
+      "peak_activation": {
+        "kick": 0.92575,
+        "snare": 0.88342,
+        "tom": 0.16359,
+        "hihat": 0.8463,
+        "cymbal": 0.2604
+      }
+    },
+    "techno-minimal-emotion": {
+      "audio_sha256": "30a50d271d0ed8727fa3c637f1ca7abdb07f900d76cf6bdf5e0a3bb9b87a7020",
+      "separate_job": "98d0df8518c8435984b694e5c17377f0",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/98d0df8518c8435984b694e5c17377f0/drums.wav",
+      "transcribe_job": "5e32a3f83005429ab8b770299f4e3ac4",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/5e32a3f83005429ab8b770299f4e3ac4/events.json",
+      "peak_activation": {
+        "kick": 0.92675,
+        "snare": 0.88163,
+        "tom": 0.82444,
+        "hihat": 0.84733,
+        "cymbal": 0.77877
+      }
+    },
+    "trance-goa-mantra": {
+      "audio_sha256": "73623b63befb132eba2d7ba7c556ecc0f4f313aa30552fbcde4518d41442f156",
+      "separate_job": "25278491abc84da5848f358aa5eb47c5",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/25278491abc84da5848f358aa5eb47c5/drums.wav",
+      "transcribe_job": "c69359c042a74a73a84a285fb408e7ff",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/c69359c042a74a73a84a285fb408e7ff/events.json",
+      "peak_activation": {
+        "kick": 0.90469,
+        "snare": 0.88602,
+        "tom": 0.7321,
+        "hihat": 0.73508,
+        "cymbal": 0.8471
+      }
+    },
+    "trance-infected-vibes": {
+      "audio_sha256": "5670c759faa0d48e94005fed7ecf4683973d35cd3cccee4f49fd1cea42cf9a46",
+      "separate_job": "947ab9255598403586f0cd52eefa71cf",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/947ab9255598403586f0cd52eefa71cf/drums.wav",
+      "transcribe_job": "97d974eea11f407d8362b0e42e1d283b",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/97d974eea11f407d8362b0e42e1d283b/events.json",
+      "peak_activation": {
+        "kick": 0.91458,
+        "snare": 0.8466,
+        "tom": 0.54255,
+        "hihat": 0.73131,
+        "cymbal": 0.59242
+      }
+    },
+    "trance-party": {
+      "audio_sha256": "8d485930cdc79bf0ed16653b819ecfbbb160a07f9688be1892fcb5733905c4f5",
+      "separate_job": "8c988a86abc74aa18fe23d97d6c13705",
+      "drum_stem": "blinky/seedexp-20261125/htdemucs/8c988a86abc74aa18fe23d97d6c13705/drums.wav",
+      "transcribe_job": "0e952df851b64f60a8591ef465589f75",
+      "events": "blinky/seedexp-20261125/tr_adtof_stem/0e952df851b64f60a8591ef465589f75/events.json",
+      "peak_activation": {
+        "kick": 0.932,
+        "snare": 0.8442,
+        "tom": 0.59614,
+        "hihat": 0.8034,
+        "cymbal": 0.58664
+      }
+    }
+  }
+}

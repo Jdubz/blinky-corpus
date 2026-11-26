@@ -115,6 +115,54 @@ def test_seed_order(corpus):
     assert c["started_from"]["source"] == "drums_adtof"
 
 
+def test_reference_set_is_a_ghost_layer_never_a_seed(corpus, edm):
+    """seeds.json "references" (edm/drums_adtof_stem/, ADTOF on the drum stem) show up as ghost
+    ticks only: never a seed, even when it's the track's only label file."""
+    _w(edm / "drums_adtof_stem" / "a.kick_weighted.json",
+       _kw([(1.0, "kick"), (1.5, "snare"), (1.75, "snare"), (1.25, "hihat")]))
+    a = srv.load_track(corpus, "a")
+    assert a["seed"] == "drums_adtof"
+    assert [o["time"] for o in a["onsets"]] == [1.0, 1.5, 2.0]  # still the ADTOF seed
+    assert a["references"]["drums_adtof_stem"]["snare"] == [1.5, 1.75]
+    assert "drums_adtof_stem" not in srv.load_track(corpus, "b")["references"]
+    (edm / "d.mp3").write_bytes(b"x" * 10)
+    _w(edm / "drums_adtof_stem" / "d.kick_weighted.json", _kw([(1.0, "kick")]))
+    d = srv.load_track(corpus, "d")
+    assert d["seed"] == "empty" and d["onsets"] == []
+    assert d["references"]["drums_adtof_stem"]["kick"] == [1.0]
+    assert srv.track_summary(corpus, "d")["label_source"] == "none"
+    pub = {s["name"]: s for s in srv.seeds_public(corpus)}
+    assert pub["drums_adtof_stem"]["reference"] is True and "reference" not in pub["drums_adtof"]
+
+
+def test_references_in_seeds_json_are_validated(tmp_path):
+    lc = srv.labelcheck
+    good = {"seeds": [{"name": "drums_adtof", "dir": "drums_adtof", "suffix": ".kick_weighted.json"}]}
+    p = tmp_path / "seeds.json"
+    p.write_text(json.dumps(good))
+    assert lc.load_sources(p)[1] == []  # "references" is optional
+    for refs in ([{"name": "drums_adtof", "dir": "x", "suffix": ".json"}],  # clashes with a seed
+                 [{"name": "r", "dir": "../x", "suffix": ".json"}],
+                 {"name": "r"}):
+        p.write_text(json.dumps({**good, "references": refs}))
+        with pytest.raises(ValueError):
+            lc.load_sources(p)
+
+
+def test_committed_reference_sets_parse():
+    """Every committed reference file belongs to a corpus track and parses as the page expects."""
+    edm = SERVER_PY.parents[2] / "edm"
+    c = srv.Corpus(edm)
+    assert c.references(), "seeds.json lists no reference sets"
+    for r in c.references():
+        files = sorted((edm / r.dir).glob(f"*{r.suffix}"))
+        assert files, r.dir
+        assert {f.name.removesuffix(r.suffix) for f in files} <= set(c.stems())
+        for f in files:
+            lab = srv.split_auto_labels(json.loads(f.read_text()), f.name)
+            assert lab["kick"] or lab["snare"], f.name
+
+
 def test_skipped_adtof_is_not_a_seed(corpus, edm):
     _w(edm / "drums_adtof" / "b.kick_weighted.json", {"skipped": True, "onsets": []})
     b = srv.load_track(corpus, "b")
