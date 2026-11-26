@@ -6,7 +6,7 @@
   "started_from": {"source": "drums_adtof", "file": "edm/drums_adtof/dnb-energetic-breakbeat.kick_weighted.json", "sha256": "c8011844fd91c3785789ca2d7d301bcf9f97b86bf52f0648336a4396146133e6", "generator": {"algorithm": "adtof_frame_rnn", "version": 1, "params": {"package": "adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9", "weights_sha256": "1bc986e596ec47ba0b44916f87cd4a39f0b2bec23596df3fb5d0e87749217320", "thresholds": [0.22, 0.24, 0.32, 0.22, 0.3], "fps": 100, "classes": {"35": "kick", "38": "snare", "42": "hihat"}, "weights": {"kick": 1, "snare": 1, "hihat": 0}, "min_rms": 0.005}, "attribution": "ADTOF, Zehren et al. (github.com/MZehren/ADTOF), CC BY-NC-SA 4.0"}},
   "reviewed_ranges": [],
   "complete": false,
-  "updated": "2026-11-26T02:11:18+00:00",
+  "updated": "2026-11-26T20:52:18+00:00",
   "onsets": [
     {"time": 12.86, "type": "snare"},
     {"time": 13.02, "type": "snare"},
