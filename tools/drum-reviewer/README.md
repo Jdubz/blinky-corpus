@@ -125,7 +125,7 @@ The server refuses to save (HTTP 409) when the mp3's sha256 doesn't match the sh
 
 ## How saved labels reach the scorer
 
-From the hosted reviewer, a completed save is already a pull request: it merges once CI passes, then step 3 applies. Locally:
+From the hosted reviewer, a completed save becomes a pull request by itself (a pushed `labels/` branch, opened by `labels-pr.yml`): it merges once CI passes, then step 3 applies. Locally:
 
 1. Commit `edm/drums_human/<stem>.drums.json` on a branch of blinky-corpus and open a PR. CI runs these tests and the scorer's.
 2. Once it's merged to `main`, `blinky_scoring.drum_scoring.drum_label_path` picks the human file for that track when `complete` is true. Otherwise it falls back to `drums_adtof/`.
@@ -140,7 +140,7 @@ The hosted reviewer is the same server and page, run as a public service so the 
 ```sh
 docker build -t drum-reviewer tools/drum-reviewer
 docker run --read-only --tmpfs /tmp --cap-drop ALL -v state:/state -v corpus:/corpus \
-  -e REVIEWER_GITHUB_TOKEN=... drum-reviewer --host 0.0.0.0 --state /state \
+  -e REVIEWER_DEPLOY_KEY_B64=... drum-reviewer --host 0.0.0.0 --state /state \
   --checkout /corpus/blinky-corpus --git-url https://github.com/Jdubz/blinky-corpus.git \
   --github-repo Jdubz/blinky-corpus --allow-host <api name> --cors-origin <site origin> \
   --trust-cf-connecting-ip
@@ -150,29 +150,38 @@ docker run --read-only --tmpfs /tmp --cap-drop ALL -v state:/state -v corpus:/co
 - **Who you are:** an optional name, typed in Settings and remembered in the browser. It's shown with your edit lock and recorded with your saves. Each browser tab also has a random id.
 - **Edit locks:** opening a track takes its lock for 15 minutes, renewed while you're active. Everyone else gets the track view-only, with "being edited by …" in the track list. A tab, or an address, holds a limited number of locks. The same name on another machine can take a lock over.
 - **Drafts** autosave on the server, per track and per name, so you can carry on from another computer by typing the same name. An anonymous draft belongs to its browser tab. `--import-draft FILE --contributor NAME` copies a local `.drafts/` file into the store (the source is only read).
-- **Saving** needs the track 100% reviewed. The server runs the same checks as CI (`labelcheck.py`), then opens a pull request: a branch `labels/<track>-<time>` with one commit of the one file, carrying `Contributed-by:` (the name), `Client-IP-Hash:` (a keyed hash; no address is stored) and `Reviewer-Save-Id:` trailers, with auto-merge (squash) on. The save is refused if anyone saved the track since you opened it (a version check), and while an earlier save of the track is still an open PR. Your work is kept as a draft whatever happens.
-- **After the PR:** the service follows it. When `main` moves first, it brings the branch up to date (`main` requires up-to-date branches). Once merged and in the clone, the track is ordinary human ground truth. A PR that's closed unmerged comes back as the contributor's draft.
+- **Saving** needs the track 100% reviewed. The server runs the same checks as CI (`labelcheck.py`), then pushes a branch `labels/<track>-<id>`: one commit, on top of `main`, of the one file. The commit carries `Contributed-by:` (the name), `Client-IP-Hash:` (a keyed hash; no address is stored) and `Reviewer-Save-Id:` trailers.
+  - The service holds **no GitHub token**. It pushes with a **deploy key** that has write access to this repository only, over `ssh://git@ssh.github.com:443`: the egress firewall allows only TCP 443.
+  - GitHub's host keys are pinned in `github_known_hosts` (from `api.github.com/meta`; checked against GitHub's published fingerprints by a test), never trusted on first use.
+  - The commit is built with git plumbing and a scratch index, so the clone's working tree is never written.
+  - The save is refused if anyone saved the track since you opened it (a version check), when `main` on GitHub changed the file, and while an earlier save of the track is still pending. Your work is kept as a draft whatever happens.
+- **The pull request:** `.github/workflows/labels-pr.yml` runs on the push. With `GITHUB_TOKEN` it opens the PR from the commit's message and turns on auto-merge (squash; the squash commit keeps the trailers).
+  - A PR opened with `GITHUB_TOKEN` starts no `pull_request` workflows. So `tests.yml` also runs on `push` to `labels/**`, and its **Scoring tests** job on that push is the required check on the PR's head.
+  - This needs the repository setting "Allow GitHub Actions to create and approve pull requests" on.
+- **After the push:** the service follows the PR through the public API, unauthenticated, at most one lookup per `--poll-every` seconds (GitHub allows 60 an hour per address).
+  - When `main` moves first, it rebuilds the branch on the new `main` and force-pushes it (`main` requires up-to-date branches); the workflow runs again and keeps auto-merge on.
+  - If `main` changed the same file, the save ends and comes back as a draft.
+  - Once merged and in the clone, the track is ordinary human ground truth.
+  - A PR that's closed unmerged (for example by the label checks) comes back as the contributor's draft, and the branch is deleted.
 - **Rate limits** per client address: requests, lock grabs, drafts and saves, plus a global cap on saves (`DEFAULT_LIMITS` in `server.py`). A refusal is HTTP 429 with `Retry-After`.
 - **Logs:** one JSON line per request on stdout (`"event": "http"`, with the path, status, time and the client's hash), plus events: `save`, `save_refused`, `save_conflict`, `save_failed`, `lock_acquired`, `rate_limited`, `pr_merged`, `pr_closed`, `refresh_failed`, and others. Every save is also appended to `saves.jsonl` in the state directory.
-- **Without a token** (`REVIEWER_GITHUB_TOKEN` empty) locks and drafts work and saving answers 503.
-
-The token is a fine-grained GitHub token on this repository only, with Contents (read and write) and Pull requests (read and write).
+- **Without the deploy key** (`REVIEWER_DEPLOY_KEY_B64` empty) locks and drafts work and saving answers 503.
 
 ### The label checks in CI
 
-Every pull request runs `python tools/drum-reviewer/labelcheck.py --base origin/main` in the required **Scoring tests** job. A PR that touches `edm/drums_human/` must:
+Every pull request, and every push to a `labels/` branch, runs `python tools/drum-reviewer/labelcheck.py --base origin/main` in the required **Scoring tests** job. A PR that touches `edm/drums_human/` must:
 
 1. change only that one file, adding or modifying it (no deletes or renames);
 2. match the schema the reviewer writes, against the track's mp3 and manifest duration;
 3. be 100% reviewed;
 4. be plausible against the file it replaces (the human file on `main`, else the seed it started from): it may not delete more than half of that file's hits (counted regardless of class, so a kick relabelled as a snare isn't a delete), put any class count far outside the range of every reference, or leave a class empty while a reference has hits in it.
 
-The owner's `labels-override` PR label skips step 4 only. A hosted reviewer PR (`labels/` branch) that fails is closed with the reason, and the service returns the labels to the contributor's drafts. On `main`, `--all` checks every human file's schema.
+The owner's `labels-override` PR label skips step 4 only, on PRs that run `pull_request` workflows (an owner's own). A hosted reviewer PR (`labels/` branch) that fails is closed with the reason, and the service returns the labels to the contributor's drafts. To accept one anyway, the owner merges it by hand. On `main`, `--all` checks every human file's schema.
 
 ## Tests
 
 - `tests/test_drum_reviewer.py` (pytest, small fixture files) covers listing, seed order, saving, validation, atomic writes, path traversal, the size cap, sha refusal, cross-site and DNS-rebinding refusal, audio range requests, and the scorer reading a saved file.
-- `tests/test_drum_reviewer_hosted.py` covers hosted mode against a fake GitHub (`tests/fake_github.py`): locks, versions, drafts that follow a name, rate limits, CORS, the client address, the save → pull request path and its failures, following the PR, importing drafts, seed precedence and the clone's refresh.
+- `tests/test_drum_reviewer_hosted.py` covers hosted mode with pushes to a local bare repository and a fake of the public pull-request lookup (`tests/fake_github.py`): locks, versions, drafts that follow a name, rate limits, CORS, the client address, the save → branch path and its failures, following the PR (merged, closed, `main` moving, `main` changing the file, throttled lookups), the pinned host keys, the deploy key file, importing drafts, seed precedence and the clone's refresh.
 - `tests/test_labelcheck.py` covers the CI label checks, including the one-file rule on a scratch git repository.
 - `python tools/drum-reviewer/check_js.py` syntax-checks the page's inline scripts with `node --check` and refuses external resources.
 - CI's **Hosted reviewer** job builds the image and runs it with the production sandbox (non-root, read-only root filesystem, no capabilities) against the fake GitHub. `tests/e2e_hosted.py` walks the API flow; `tests/browser_hosted.py` drives the page in Chromium from another origin, with two people on one track.

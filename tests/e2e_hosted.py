@@ -3,11 +3,12 @@
 tests/fake_github.py standing in for GitHub):
 
     python tests/e2e_hosted.py --api http://127.0.0.1:8766 --fake http://127.0.0.1:9999 \\
-        --origin https://site.example.invalid --host api.example.invalid
+        --origin https://site.example.invalid --host api.example.invalid --remote /path/to/bare.git
 
 Walks the multi-user flow over HTTP the way two browsers would: CORS, locks, drafts that follow a
-name, an incomplete save kept as a draft, a complete save that becomes a pull request with
-auto-merge, a pending track refusing a second save, the merge being followed, and rate limiting.
+name, an incomplete save kept as a draft, a complete save pushed as a labels/ branch (to --remote,
+the stand-in for GitHub), the workflow's pull request being picked up, a pending track refusing a
+second save, the merge being followed, and rate limiting.
 Exits non-zero on the first failure. Standard library only.
 """
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 import urllib.error
@@ -72,6 +74,7 @@ def main() -> None:
     ap.add_argument("--fake", required=True)
     ap.add_argument("--origin", required=True, help="the --cors-origin the server was started with")
     ap.add_argument("--host", help="Host header (an --allow-host name)")
+    ap.add_argument("--remote", required=True, help="the bare repository the service pushes to")
     ap.add_argument("--wait", type=float, default=120, help="seconds to wait for the server")
     args = ap.parse_args()
     e = E2E(args.api, args.fake, args.origin, args.host)
@@ -127,32 +130,42 @@ def main() -> None:
 
     body["reviewed_ranges"] = [[0, view["manifest_duration"]]]
     st, _, b = e.call("POST", f"/api/save?stem={stem}", body)
-    check(st == 200 and b.get("pr") == 1, f"a complete save opens a pull request ({b})")
-    fs = e.fake_state()
-    (commit,) = fs["commits"]
-    check(commit["path"] == f"edm/drums_human/{stem}.drums.json" and commit["branch"].startswith(f"labels/{stem}-"),
-          "one commit, on a labels/ branch, of the one label file")
-    check("Contributed-by: E2E Ana" in commit["message"] and "Client-IP-Hash: " in commit["message"],
+    check(st == 200 and b.get("branch", "").startswith(f"labels/{stem}-") and b.get("pr") is None,
+          f"a complete save is pushed as a labels/ branch ({b})")
+    branch = b["branch"]
+    git = lambda *a: subprocess.run(["git", "-C", args.remote, *a], capture_output=True, text=True,  # noqa: E731
+                                    check=True).stdout
+    check(git("diff", "--name-only", f"{branch}^", branch).split() == [f"edm/drums_human/{stem}.drums.json"],
+          "one commit, of the one label file")
+    msg = git("log", "-1", "--format=%B", branch)
+    check("Contributed-by: E2E Ana" in msg and "Client-IP-Hash: " in msg,
           "commit trailers name the contributor and a hashed client address")
-    check("127.0.0.1" not in commit["message"] and "127.0.0.1" not in json.dumps(fs["prs"]),
-          "no client address in the commit or the PR")
-    check(fs["automerge"] and fs["automerge"][0]["merge_method"] == "SQUASH", "auto-merge (squash) is on")
+    check("127.0.0.1" not in msg, "no client address in the commit")
 
     st, _, t = e.call("GET", f"/api/track?stem={stem}")
-    check(t["pending"]["pr"] == 1 and t["seed"] == "human" and t["lock"] is None,
+    check(t["pending"]["branch"] == branch and t["seed"] == "human" and t["lock"] is None,
           "the track shows the pending save, its lock released")
     lock(stem)
     st, _, b = e.call("POST", f"/api/save?stem={stem}", dict(body, base_version=t["version"]))
-    check(st == 409 and "PR #1" in b["error"], "a pending track takes no second save")
+    check(st == 409 and "waiting" in b["error"], "a pending track takes no second save")
     e.call("POST", f"/api/lock?stem={stem}", {"action": "release"})
 
-    e.fake_post("/_fake/pr/1", {"merged": True, "state": "closed"})
+    e.fake_post("/_fake/pr", {"head": branch})  # what .github/workflows/labels-pr.yml does
+    deadline = time.monotonic() + 60
+    while e.call("GET", f"/api/track?stem={stem}")[2]["pending"]["pr"] != 1:
+        if time.monotonic() > deadline:
+            check(False, "the workflow's PR was picked up within 60 s")
+        time.sleep(1)
+    check(True, "the workflow's PR is picked up (unauthenticated lookup)")
+    check(not e.fake_state()["auth_seen"], "the service sent no GitHub credentials")
+
+    e.fake_post("/_fake/pr/1", {"merged_at": "2026-11-26T00:00:00Z", "state": "closed"})
     deadline = time.monotonic() + 60
     while e.call("GET", f"/api/track?stem={stem}")[2]["pending"]["state"] != "merged":
         if time.monotonic() > deadline:
             check(False, "the merge was noticed within 60 s")
         time.sleep(1)
-    check(commit["branch"] in e.fake_state()["deleted"], "the merge is followed and the branch deleted")
+    check(branch not in git("for-each-ref", "--format=%(refname:short)"), "the merge is followed and the branch deleted")
 
     # Lock grabs are rate limited per client address (30 per hour by default): different tabs,
     # same address, alternating between two tracks.

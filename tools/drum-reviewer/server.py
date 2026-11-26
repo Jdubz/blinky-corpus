@@ -14,13 +14,16 @@ Local mode (one person, a corpus clone):
 
 Hosted mode (many people, a public URL; see README.md "Hosted"):
 
-    REVIEWER_GITHUB_TOKEN=... python tools/drum-reviewer/server.py --host 0.0.0.0 \\
+    REVIEWER_DEPLOY_KEY_B64=... python tools/drum-reviewer/server.py --host 0.0.0.0 \\
         --state /state --checkout /corpus --git-url https://github.com/<owner>/blinky-corpus.git \\
         --github-repo <owner>/blinky-corpus --allow-host <public name> --trust-cf-connecting-ip
 
     The corpus is the service's own clone, refreshed from GitHub. Edit locks, drafts (per track
-    and contributor), pending saves and logs live in --state. A save of a 100%-reviewed track
-    becomes a pull request with auto-merge on; nothing is written into the clone.
+    and contributor), pending saves and logs live in --state. A save of a 100%-reviewed track is
+    pushed as a labels/<track>-<id> branch with a deploy key (write on the corpus repo only), and
+    the corpus workflow labels-pr.yml opens the pull request with auto-merge on. The service holds
+    no GitHub token; it reads PR state from the public API. The clone's working tree is never
+    written.
 
 Files (paths relative to edm/):
     <stem>.mp3                          the audio
@@ -527,7 +530,7 @@ class Who(NamedTuple):
 
 
 class HostedApp:
-    def __init__(self, corpus: Corpus, state: Path, publisher: hosted.Publisher | None,
+    def __init__(self, corpus: Corpus, state: Path, publisher: hosted.GitPusher | None,
                  checkout: hosted.Checkout | None = None, *, lock_ttl: float = 900.0,
                  trust_cf: bool = False, refresh_s: float = 60.0, log: hosted.JsonLog | None = None,
                  limits: dict[str, tuple[int, float]] | None = None):
@@ -600,7 +603,8 @@ class HostedApp:
         rec = self.pending.get(stem)
         if not rec or rec.get("state") not in hosted.PendingStore.ACTIVE:
             return None
-        return {"pr": rec["pr"], "url": rec["url"], "state": rec["state"],
+        return {"pr": rec.get("pr"), "url": rec["url"], "state": rec["state"],
+                "branch": rec.get("branch"),
                 "contributor": rec.get("contributor") or "someone", "created": rec.get("created")}
 
     def config(self) -> dict[str, Any]:
@@ -708,7 +712,8 @@ class HostedApp:
                 eff, src = self.effective_human(stem)
                 if src == "pending":
                     p = self.pending_public(stem)
-                    raise ApiError(409, f"A save of this track is waiting for CI (PR #{p['pr']}). "
+                    which = f"PR #{p['pr']}" if p.get("pr") else f"branch {p.get('branch')}"
+                    raise ApiError(409, f"A save of this track is waiting for CI ({which}). "
                                         "Try again once it has merged; your work is kept as a draft.")
                 doc = validate_doc(self.c, stem, body, existing=eff)
                 text = dumps_doc(doc)
@@ -738,42 +743,43 @@ class HostedApp:
             save_id = str(uuid.uuid4())
             name = who.name or "anonymous"
             headline = f"labels({stem}): human drum labels, {nk} kicks, {ns} snares"
-            pr_body = (f"Saved from the hosted drum reviewer by `{name}`: `{rel}`, 100% reviewed, "
-                       f"{nk} kicks and {ns} snares. It replaces "
-                       f"{'the existing human file' if eff else 'the seed labels'}.\n\n"
-                       "Corpus CI validates the file (`tools/drum-reviewer/labelcheck.py`), and "
-                       "auto-merge (squash) merges it once CI passes. Closing this PR stops it: the "
-                       "service puts the labels back into the contributor's drafts.")
+            body_text = (f"Saved from the hosted drum reviewer by {name}: {rel}, 100% reviewed, "
+                         f"{nk} kicks and {ns} snares. It replaces "
+                         f"{'the existing human file' if eff else 'the seed labels'}.\n\n"
+                         "Corpus CI validates the file (tools/drum-reviewer/labelcheck.py), and "
+                         "auto-merge (squash) merges it once CI passes. Closing this PR stops it: the "
+                         "service puts the labels back into the contributor's drafts.")
             trailers = (f"Contributed-by: {name}\nClient-IP-Hash: {who.ip_hash}\n"
                         f"Reviewer-Save-Id: {save_id}")
+            message = f"{headline}\n\n{body_text}\n\n{trailers}\n"
             try:
-                res = self.publisher.publish(stem, rel, text, expected, headline, pr_body, trailers)
+                res = self.publisher.publish(stem, rel, text, expected, message,
+                                             f"{name} (drum reviewer)", save_id)
             except hosted.Conflict:
                 self._kick.set()  # refresh the checkout now
                 self.log.emit("save_conflict", stem=stem, ip=who.ip_hash, contributor=who.name)
                 raise ApiError(409, "The corpus changed since you opened this track. Reload it in a "
                                     "minute; your work is kept as a draft.") from None
-            except hosted.GitHubError as e:
-                self.log.emit("save_failed", stem=stem, ip=who.ip_hash, error=e.message,
-                              status=e.status)
-                raise ApiError(502, "Couldn't open the pull request on GitHub. Your work is kept "
-                                    "as a draft; try again later.") from None
-            rec = {"stem": stem, "pr": res["pr"], "url": res["url"], "branch": res["branch"],
-                   "state": "open", "created": now_iso(), "contributor": who.name,
-                   "ip": who.ip_hash, "draft_key": who.draft_key, "save_id": save_id,
-                   "automerge": res["automerge"], "text": text}
+            except (hosted.GitHubError, RuntimeError) as e:
+                self.log.emit("save_failed", stem=stem, ip=who.ip_hash, error=str(e)[:300])
+                raise ApiError(502, "Couldn't send the labels to GitHub. Your work is kept as a "
+                                    "draft; try again later.") from None
+            url = f"https://github.com/{self.publisher.gh.repo}/tree/{res['branch']}"
+            rec = {"stem": stem, "pr": None, "url": url, "path": rel, "state": "open",
+                   "created": now_iso(), "created_t": time.time(), "contributor": who.name,
+                   "ip": who.ip_hash, "draft_key": who.draft_key, "save_id": save_id, "text": text,
+                   **res}
             self.pending.put(stem, rec)
         self.drafts.delete(stem, who.draft_key)
         self.locks.release(stem, who.client or "")
-        entry = {"ts": rec["created"], "stem": stem, "pr": res["pr"], "contributor": who.name,
-                 "ip": who.ip_hash, "save_id": save_id, "kicks": nk, "snares": ns,
-                 "automerge": res["automerge"]}
+        entry = {"ts": rec["created"], "stem": stem, "branch": res["branch"], "commit": res["commit"],
+                 "contributor": who.name, "ip": who.ip_hash, "save_id": save_id, "kicks": nk,
+                 "snares": ns}
         with open(self.state / "saves.jsonl", "a") as f:
             f.write(json.dumps(entry) + "\n")
-        self.log.emit("save", **{k: v for k, v in entry.items() if k != "ts"},
-                      automerge_error=res.get("automerge_error"))
-        return {"ok": True, "complete": True, "count": len(doc["onsets"]), "pr": res["pr"],
-                "url": res["url"], "automerge": res["automerge"], "updated": doc["updated"]}
+        self.log.emit("save", **{k: v for k, v in entry.items() if k != "ts"})
+        return {"ok": True, "complete": True, "count": len(doc["onsets"]), "pr": None,
+                "branch": res["branch"], "url": url, "updated": doc["updated"]}
 
     # -- background: refresh the checkout, follow open pull requests
     def tick(self) -> None:
@@ -785,20 +791,39 @@ class HostedApp:
         for stem, rec in self.pending.all().items():
             if rec["state"] == "open" and self.publisher is not None:
                 try:
-                    st = self.publisher.poll(rec)
-                except hosted.GitHubError as e:
-                    self.log.emit("pr_poll_failed", stem=stem, pr=rec["pr"], error=e.message)
+                    upd = self.publisher.rebase_if_behind(rec)
+                    if upd:
+                        self.pending.update(stem, **upd)
+                        rec.update(upd)
+                except hosted.Conflict as e:  # main changed this very file: the PR can't merge
+                    self.log.emit("pr_conflict", stem=stem, branch=rec["branch"], error=str(e))
+                    self._restore_draft(stem, rec)
+                    self.pending.clear(stem)
+                    self.publisher.cleanup(rec)
                     continue
+                except (hosted.GitHubError, RuntimeError) as e:
+                    self.log.emit("rebase_failed", stem=stem, branch=rec["branch"], error=str(e)[:300])
+                try:
+                    st, pr = self.publisher.poll(rec)
+                except hosted.GitHubError as e:
+                    self.log.emit("pr_poll_failed", stem=stem, branch=rec["branch"], error=e.message[:200])
+                    continue
+                if pr is not None and rec.get("pr") != pr.get("number"):
+                    self.pending.update(stem, pr=pr["number"], url=pr["html_url"])
+                    rec.update(pr=pr["number"], url=pr["html_url"])
+                    self.log.emit("pr_opened", stem=stem, pr=pr["number"], branch=rec["branch"])
                 if st == "merged":
                     self.pending.update(stem, state="merged", merged_at=time.time())
-                    self.log.emit("pr_merged", stem=stem, pr=rec["pr"], contributor=rec["contributor"])
+                    self.log.emit("pr_merged", stem=stem, pr=rec.get("pr"), contributor=rec["contributor"])
                     self.publisher.cleanup(rec)
                 elif st == "closed":
                     self._restore_draft(stem, rec)
                     self.pending.clear(stem)
-                    self.log.emit("pr_closed", stem=stem, pr=rec["pr"], contributor=rec["contributor"])
+                    self.log.emit("pr_closed", stem=stem, pr=rec.get("pr"), contributor=rec["contributor"])
                     self.publisher.cleanup(rec)
                     continue
+                elif st == "waiting" and time.time() - rec.get("created_t", time.time()) > 1800:
+                    self.log.emit("pr_missing", stem=stem, branch=rec["branch"])  # workflow didn't open it
             rec = self.pending.get(stem)
             if rec and rec["state"] == "merged":
                 with self.rw.read():
@@ -807,7 +832,7 @@ class HostedApp:
                 # Landed in the checkout; or long merged and the file has moved on since.
                 if landed or time.time() - rec.get("merged_at", 0) > 1800:
                     self.pending.clear(stem)
-                    self.log.emit("pr_landed", stem=stem, pr=rec["pr"], in_checkout=landed)
+                    self.log.emit("pr_landed", stem=stem, pr=rec.get("pr"), in_checkout=landed)
 
     def _restore_draft(self, stem: str, rec: dict[str, Any]) -> None:
         key = rec.get("draft_key")
@@ -818,7 +843,7 @@ class HostedApp:
         try:
             self.drafts.save(stem, key, dumps_doc(doc))
         except OverflowError:
-            self.log.emit("draft_restore_failed", stem=stem, pr=rec["pr"])
+            self.log.emit("draft_restore_failed", stem=stem, branch=rec.get("branch"))
 
     def start(self) -> None:
         def loop() -> None:
@@ -836,6 +861,22 @@ class HostedApp:
     def stop(self) -> None:
         self._stop.set()
         self._kick.set()
+
+
+def deploy_key_file(b64: str) -> Path | None:
+    """The deploy key (base64 of the OpenSSH private key, from the environment) written to a 0600
+    file on /tmp, a tmpfs in the container: ssh needs a file, and it never touches a disk."""
+    if not b64.strip():
+        return None
+    import base64
+    key = base64.b64decode(b64.strip(), validate=True)
+    if b"PRIVATE KEY" not in key:
+        raise SystemExit("REVIEWER_DEPLOY_KEY_B64 is not a base64 OpenSSH private key")
+    fd, name = tempfile.mkstemp(prefix="deploy-key-", dir="/tmp")
+    with os.fdopen(fd, "wb") as f:
+        f.write(key)
+    os.chmod(name, 0o600)
+    return Path(name)
 
 
 def import_drafts(app: HostedApp, files: list[Path], contributor: str) -> list[str]:
@@ -1178,9 +1219,18 @@ def main(argv: list[str] | None = None) -> None:
     h.add_argument("--git-branch", default="main")
     h.add_argument("--refresh", type=float, default=60.0, metavar="S",
                    help="refresh the clone and follow open pull requests every S seconds")
-    h.add_argument("--github-repo", metavar="OWNER/NAME", help="where saves become pull requests; "
-                   "the token comes from $REVIEWER_GITHUB_TOKEN")
-    h.add_argument("--github-api", default="https://api.github.com")
+    h.add_argument("--github-repo", metavar="OWNER/NAME", help="the corpus repo: saves are pushed as "
+                   "labels/<track>-<id> branches, and a workflow there opens the pull request")
+    h.add_argument("--github-api", default="https://api.github.com",
+                   help="read without a token: pull request state")
+    h.add_argument("--push-url", help="where branches are pushed (default "
+                   "ssh://git@ssh.github.com:443/<repo>.git, with the deploy key from "
+                   "$REVIEWER_DEPLOY_KEY_B64)")
+    h.add_argument("--known-hosts", type=Path, default=STATIC_DIR / "github_known_hosts",
+                   help="GitHub's pinned SSH host keys")
+    h.add_argument("--poll-every", type=float, default=65.0, metavar="S",
+                   help="at most one (unauthenticated) pull-request lookup per S seconds; GitHub "
+                        "allows 60 an hour per address")
     h.add_argument("--lock-ttl", type=float, default=900.0, metavar="S")
     h.add_argument("--cors-origin", action="append", default=[], metavar="URL",
                    help="a page origin (scheme://host) allowed to call this API, e.g. the product "
@@ -1211,12 +1261,19 @@ def main(argv: list[str] | None = None) -> None:
         if not args.import_draft:
             if not args.github_repo:
                 ap.error("hosted mode needs --github-repo")
-            token = os.environ.get("REVIEWER_GITHUB_TOKEN", "")
-            if token:
-                gh = hosted.GitHub(args.github_repo, token, args.github_api)
-                publisher = hosted.Publisher(gh, args.git_branch, log)
-            else:  # locks and drafts work; a save answers 503 until a token is configured
-                log.emit("publishing_disabled", reason="REVIEWER_GITHUB_TOKEN is empty")
+            if checkout is None:
+                ap.error("hosted mode needs --checkout (saves are commits made in it)")
+            push_url = args.push_url or f"ssh://git@ssh.github.com:443/{args.github_repo}.git"
+            key_file = deploy_key_file(os.environ.get("REVIEWER_DEPLOY_KEY_B64", ""))
+            if push_url.startswith("ssh://") and key_file is None:
+                # locks and drafts work; a save answers 503 until a deploy key is configured
+                log.emit("publishing_disabled", reason="REVIEWER_DEPLOY_KEY_B64 is empty")
+            else:
+                publisher = hosted.GitPusher(checkout, push_url,
+                                             hosted.PublicGitHub(args.github_repo, args.github_api),
+                                             key_file=key_file, known_hosts=args.known_hosts,
+                                             base=args.git_branch, poll_every=args.poll_every,
+                                             log=log)
         app = HostedApp(Corpus(edm), args.state, publisher, checkout, lock_ttl=args.lock_ttl,
                         trust_cf=args.trust_cf_connecting_ip, refresh_s=args.refresh, log=log)
         if args.import_draft:

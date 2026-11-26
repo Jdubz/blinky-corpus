@@ -814,7 +814,7 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp
 function safeUrl(u) { return /^https:\/\/github\.com\//.test(u || "") ? u : "#"; }
 function trackStatus(t) {
   const out = [];
-  if (t.pending) out.push(`<span class="badge pending">in review</span> <a class="link" href="${escapeHtml(safeUrl(t.pending.url))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">PR #${Number(t.pending.pr)}</a>`);
+  if (t.pending) out.push(`<span class="badge pending">in review</span> <a class="link" href="${escapeHtml(safeUrl(t.pending.url))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${t.pending.pr ? `PR #${Number(t.pending.pr)}` : "opening its PR"}</a>`);
   if (t.lock) out.push(t.lock.mine ? '<span class="lockinfo">you are editing</span>' : `<span class="lockinfo">being edited by ${escapeHtml(t.lock.name)}</span>`);
   return out.join(" ");
 }
@@ -851,7 +851,7 @@ async function openTrack(stem) {
   const be = $("banner-err"), bw = $("banner-warn");
   be.className = "banner" + (meta.error ? " err" : ""); be.textContent = meta.error || "";
   const notes = [meta.warning ? `⚠ ${meta.warning}` : "", S.readOnly ? `🔒 ${S.readOnlyWhy}` : "",
-    meta.pending ? `In review: a save of this track by ${meta.pending.contributor} is pull request #${meta.pending.pr}. It joins the corpus once its checks pass; until then the track takes no other save (your edits still autosave as a draft).` : ""].filter(Boolean);
+    meta.pending ? `In review: a save of this track by ${meta.pending.contributor} is ${meta.pending.pr ? `pull request #${meta.pending.pr}` : "on its way to a pull request"}. It joins the corpus once its checks pass; until then the track takes no other save (your edits still autosave as a draft).` : ""].filter(Boolean);
   bw.className = "banner" + (notes.length ? " warn" : ""); bw.textContent = notes.join("  ");
   const refNames = Object.keys(meta.references || {});
   $("ref").innerHTML = '<option value="">none</option>' + refNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(seedLabel(n))}</option>`).join("");
@@ -913,7 +913,7 @@ async function save() {
   if (S.meta.error) return toast("saving refused: " + S.meta.error, 6000);
   if (viewOnly()) return;
   if (CFG.hosted && !isComplete()) return toast("Submitting adds the track to the corpus, so it needs to be 100% reviewed first (U finds the gaps). Your edits autosave as a draft.", 6000);
-  if (CFG.hosted && !confirm(`Submit ${S.stem} to the corpus?\n\nThis opens a pull request with your labels${contributor() ? ` under the name "${contributor()}"` : " (anonymously: set a name in Settings)"}. It merges by itself once its checks pass.`)) return;
+  if (CFG.hosted && !confirm(`Submit ${S.stem} to the corpus?\n\nThis sends your labels to the corpus as a pull request${contributor() ? ` under the name "${contributor()}"` : " (anonymously: set a name in Settings)"}. It merges by itself once its checks pass.`)) return;
   clearTimeout(S.draftTimer);
   try {
     const r = await api(`/api/save?stem=${encodeURIComponent(S.stem)}`, docBody());
@@ -921,11 +921,11 @@ async function save() {
     S.meta.seed = "human";
     const badge = $("seedbadge"); badge.className = "badge human"; badge.textContent = "human GT";
     if (CFG.hosted) {
-      S.lockHeld = false; S.readOnly = true; S.readOnlyWhy = `Submitted as pull request #${r.pr}: it joins the corpus once its checks pass.`;
-      S.meta.pending = { pr: r.pr, url: r.url, contributor: contributor() || "you" };
+      S.lockHeld = false; S.readOnly = true; S.readOnlyWhy = "Submitted: it joins the corpus once its checks pass.";
+      S.meta.pending = { pr: r.pr, url: r.url, branch: r.branch, contributor: contributor() || "you" };
       const bw = $("banner-warn"); bw.className = "banner warn";
-      bw.innerHTML = `✓ Submitted as <a class="link" href="${escapeHtml(safeUrl(r.url))}" target="_blank" rel="noopener">pull request #${Number(r.pr)}</a>. It joins the corpus once its checks pass${r.automerge ? "" : " and the owner merges it"}. Thank you!`;
-      toast(`submitted: PR #${r.pr}`, 5000);
+      bw.innerHTML = `✓ Submitted as <a class="link" href="${escapeHtml(safeUrl(r.url))}" target="_blank" rel="noopener">${escapeHtml(r.branch)}</a>. A pull request opens in a minute and merges by itself once its checks pass. Thank you!`;
+      toast("submitted", 5000);
     } else toast(`saved ${r.count} hits to ${r.path}${r.complete ? " · track complete" : ""}`, 3500);
     updateInfo(); loadTracks().catch(() => {});
   } catch (e) {

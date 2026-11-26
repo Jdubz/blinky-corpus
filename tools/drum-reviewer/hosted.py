@@ -7,7 +7,8 @@
 * LockTable: short-lived per-track edit locks, persisted across restarts.
 * DraftStore: drafts per track and contributor, server-side.
 * PendingStore: saves that are open pull requests, until the corpus checkout shows them merged.
-* GitHub / Publisher: a completed save becomes a branch commit and a pull request with auto-merge.
+* GitPusher / PublicGitHub: a completed save becomes a branch pushed with the service's deploy key;
+  a corpus workflow opens the pull request with auto-merge. PR state is read from the public API.
 * Checkout: the service's own clone of the corpus, refreshed from GitHub.
 
 Python standard library only.
@@ -15,7 +16,6 @@ Python standard library only.
 
 from __future__ import annotations
 
-import base64
 import datetime as _dt
 import hashlib
 import hmac
@@ -30,6 +30,7 @@ import threading
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -385,148 +386,139 @@ class Conflict(Exception):
     """The corpus on GitHub no longer matches what the contributor edited."""
 
 
-class GitHub:
-    """The few REST/GraphQL calls the publisher needs. The token is a fine-grained token on the
-    corpus repo only: Contents read/write, Pull requests read/write."""
+class PublicGitHub:
+    """Unauthenticated reads of the public corpus repo's pull requests (GitHub allows 60 per hour per
+    address; the service needs about one a minute at most). The service holds no GitHub token."""
 
-    def __init__(self, repo: str, token: str, api: str = "https://api.github.com", timeout: float = 20):
+    def __init__(self, repo: str, api: str = "https://api.github.com", timeout: float = 15):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
             raise ValueError(f"bad repo {repo!r}")
-        if not token:
-            raise ValueError("no GitHub token")
-        self.repo, self._token, self.api, self.timeout = repo, token, api.rstrip("/"), timeout
+        self.repo, self.api, self.timeout = repo, api.rstrip("/"), timeout
 
-    def request(self, method: str, path: str, body: Any = None) -> tuple[int, Any]:
-        data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.api + path, data=data, method=method, headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {self._token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "blinky-drum-reviewer",
-            **({"Content-Type": "application/json"} if data is not None else {}),
-        })
+    def get(self, path: str) -> Any:
+        req = urllib.request.Request(self.api + path, headers={
+            "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "blinky-drum-reviewer"})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                raw = r.read()
-                return r.status, (json.loads(raw) if raw else None)
+                return json.loads(r.read() or b"null")
         except urllib.error.HTTPError as e:
-            raw = e.read()
-            try:
-                msg = json.loads(raw).get("message", "")
-            except ValueError:
-                msg = raw[:200].decode(errors="replace")
-            raise GitHubError(e.code, msg) from None
+            raise GitHubError(e.code, e.read()[:200].decode(errors="replace")) from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise GitHubError(0, f"unreachable: {e}") from None
 
-    def r(self, method: str, sub: str, body: Any = None) -> Any:
-        return self.request(method, f"/repos/{self.repo}{sub}", body)[1]
-
-    def graphql(self, query: str, variables: dict[str, Any]) -> Any:
-        _, out = self.request("POST", "/graphql", {"query": query, "variables": variables})
-        if out and out.get("errors"):
-            raise GitHubError(200, "; ".join(e.get("message", "?") for e in out["errors"]))
-        return (out or {}).get("data")
-
-    # high level
-    def branch_head(self, branch: str) -> str:
-        return self.r("GET", f"/git/ref/heads/{branch}")["object"]["sha"]
-
-    def file_sha(self, path: str, ref: str) -> str | None:
-        try:
-            return self.r("GET", f"/contents/{path}?ref={ref}")["sha"]
-        except GitHubError as e:
-            if e.status == 404:
-                return None
-            raise
-
-    def create_branch(self, name: str, sha: str) -> None:
-        self.r("POST", "/git/refs", {"ref": f"refs/heads/{name}", "sha": sha})
-
-    def delete_branch(self, name: str) -> None:
-        self.r("DELETE", f"/git/refs/heads/{name}")
-
-    def put_file(self, branch: str, path: str, text: str, message: str, sha: str | None) -> str:
-        body = {"message": message, "branch": branch,
-                "content": base64.b64encode(text.encode()).decode()}
-        if sha:
-            body["sha"] = sha
-        return self.r("PUT", f"/contents/{path}", body)["commit"]["sha"]
-
-    def create_pr(self, head: str, base: str, title: str, body: str) -> dict[str, Any]:
-        return self.r("POST", "/pulls", {"head": head, "base": base, "title": title, "body": body,
-                                         "maintainer_can_modify": True})
-
-    def enable_automerge(self, node_id: str, headline: str, body: str) -> None:
-        self.graphql(
-            "mutation($id: ID!, $h: String!, $b: String!) { enablePullRequestAutoMerge(input: "
-            "{pullRequestId: $id, mergeMethod: SQUASH, commitHeadline: $h, commitBody: $b}) "
-            "{ pullRequest { number } } }", {"id": node_id, "h": headline, "b": body})
-
-    def get_pr(self, number: int) -> dict[str, Any]:
-        return self.r("GET", f"/pulls/{int(number)}")
-
-    def update_branch(self, number: int, head_sha: str) -> None:
-        self.r("PUT", f"/pulls/{int(number)}/update-branch", {"expected_head_sha": head_sha})
+    def pr_for_branch(self, branch: str) -> dict[str, Any] | None:
+        owner = self.repo.split("/")[0]
+        prs = self.get(f"/repos/{self.repo}/pulls?state=all&per_page=5&head="
+                       f"{urllib.parse.quote(owner + ':' + branch, safe='')}")
+        return prs[0] if prs else None
 
 
-class Publisher:
-    """A completed save -> a branch `labels/<stem>-<UTC time>` with one commit, a pull request into
-    the base branch, and auto-merge (squash). The branch is made from the base branch's current head,
-    and only if the label file there is still the one the contributor started from."""
+class GitPusher:
+    """A completed save -> one commit on a branch `labels/<stem>-<id>`, pushed with the service's
+    deploy key (write access to the corpus repo only). A corpus workflow (.github/workflows/
+    labels-pr.yml) opens the pull request and turns on auto-merge; corpus CI's label checks gate it.
 
-    def __init__(self, gh: GitHub, base: str = "main", log: JsonLog | None = None):
-        self.gh, self.base, self.log = gh, base, log or JsonLog()
-        self._lock = threading.Lock()  # one publish at a time
+    The commit is built from the base branch's current head plus the one label file, with git plumbing
+    and a scratch index: the clone's working tree is never touched. When the base branch moves before
+    the PR merges, the branch is rebuilt on the new head and force-pushed (the base requires
+    up-to-date branches). Over SSH, GitHub's host keys are pinned (known_hosts from api.github.com/meta),
+    never trusted on first use."""
 
-    def publish(self, stem: str, path: str, text: str, expected_sha: str | None,
-                headline: str, body: str, trailers: str) -> dict[str, Any]:
+    def __init__(self, checkout: "Checkout", push_url: str, gh: PublicGitHub, *,
+                 key_file: Path | None = None, known_hosts: Path | None = None, base: str = "main",
+                 author_email: str = "drum-reviewer@blinky-time.joshwentworth.com",
+                 poll_every: float = 65.0, log: JsonLog | None = None,
+                 clock: Callable[[], float] = time.monotonic):
+        self.co, self.push_url, self.gh, self.base = checkout, push_url, gh, base
+        self.author_email, self.poll_every, self.clock = author_email, poll_every, clock
+        self.log = log or JsonLog()
+        self._env: dict[str, str] = {}
+        if push_url.startswith("ssh://"):
+            if key_file is None or known_hosts is None:
+                raise ValueError("an ssh push URL needs a deploy key and pinned known_hosts")
+            self._env["GIT_SSH_COMMAND"] = (
+                f"ssh -i {key_file} -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes "
+                f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts} "
+                "-o GlobalKnownHostsFile=/dev/null -o ConnectTimeout=20")
+        self._lock = threading.Lock()  # one publish or rebase at a time
+        self._last_poll = 0.0
+
+    def _git(self, *args: str, input: str | None = None, env: dict[str, str] | None = None) -> str:
+        return self.co.git(*args, input=input, env={**self._env, **(env or {})})
+
+    def _commit(self, parent: str, path: str, blob: str, message: str, author: str) -> str:
+        with tempfile.TemporaryDirectory() as d:
+            idx = {"GIT_INDEX_FILE": str(Path(d) / "index")}
+            self._git("read-tree", parent, env=idx)
+            self._git("update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=idx)
+            tree = self._git("write-tree", env=idx).strip()
+        who = {"GIT_AUTHOR_NAME": author, "GIT_AUTHOR_EMAIL": self.author_email,
+               "GIT_COMMITTER_NAME": "blinky drum reviewer", "GIT_COMMITTER_EMAIL": self.author_email}
+        return self._git("commit-tree", tree, "-p", parent, "-F", "-", input=message, env=who).strip()
+
+    def _base_head(self) -> str:
+        return self._git("rev-parse", f"refs/remotes/origin/{self.base}").strip()
+
+    def _blob_at(self, commit: str, path: str) -> str | None:
+        out = self._git("ls-tree", commit, "--", path).split()
+        return out[2] if len(out) >= 3 else None
+
+    def publish(self, stem: str, path: str, text: str, expected_sha: str | None, message: str,
+                author: str, save_id: str) -> dict[str, Any]:
         with self._lock:
-            head = self.gh.branch_head(self.base)
-            current = self.gh.file_sha(path, head)
-            if current != expected_sha:
+            self.co.refresh()  # the newest base: the branch must start from it
+            base = self._base_head()
+            if self._blob_at(base, path) != expected_sha:
                 raise Conflict(f"{path} on {self.base} changed since this track was opened")
-            branch = f"labels/{stem}-{_dt.datetime.now(_dt.timezone.utc):%Y%m%d-%H%M%S}"
-            self.gh.create_branch(branch, head)
+            blob = self._git("hash-object", "-w", "--stdin", input=text).strip()
+            commit = self._commit(base, path, blob, message, author)
+            branch = f"labels/{stem}-{save_id[:8]}"
             try:
-                commit = self.gh.put_file(branch, path, text, f"{headline}\n\n{body}\n\n{trailers}",
-                                          current)
-                pr = self.gh.create_pr(branch, self.base, headline, f"{body}\n\n```\n{trailers}\n```")
-            except GitHubError:
-                try:
-                    self.gh.delete_branch(branch)
-                except GitHubError:
-                    pass
-                raise
-            automerge, why = True, None
-            try:
-                self.gh.enable_automerge(pr["node_id"], headline, trailers)
-            except GitHubError as e:  # the PR stands; the owner can merge it by hand
-                automerge, why = False, e.message
-            return {"pr": pr["number"], "url": pr["html_url"], "branch": branch, "commit": commit,
-                    "automerge": automerge, "automerge_error": why}
+                self._git("push", "--quiet", self.push_url, f"{commit}:refs/heads/{branch}")
+            except RuntimeError as e:
+                raise GitHubError(0, str(e)[-300:]) from None
+            return {"branch": branch, "commit": commit, "base": base, "blob": blob,
+                    "expected": expected_sha, "message": message, "author": author}
 
-    def poll(self, rec: dict[str, Any]) -> str:
-        """The pull request's state: open, merged or closed. Brings a branch that has fallen behind
-        the base up to date (the base requires up-to-date branches), so auto-merge can go on."""
-        pr = self.gh.get_pr(rec["pr"])
-        if pr.get("merged"):
-            return "merged"
-        if pr.get("state") == "closed":
-            return "closed"
-        if pr.get("mergeable_state") == "behind":
+    def poll(self, rec: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+        """("open" | "merged" | "closed" | "waiting", the PR or None). At most one API call per
+        `poll_every` seconds across all pending saves (the unauthenticated limit); "skip" otherwise."""
+        now = self.clock()
+        if now - self._last_poll < self.poll_every:
+            return "skip", None
+        self._last_poll = now
+        pr = self.gh.pr_for_branch(rec["branch"])
+        if pr is None:
+            return "waiting", None
+        if pr.get("merged_at"):
+            return "merged", pr
+        return ("closed" if pr.get("state") == "closed" else "open"), pr
+
+    def rebase_if_behind(self, rec: dict[str, Any]) -> dict[str, Any] | None:
+        """If the base branch moved since the branch was made, rebuild the branch on the new head and
+        force-push it (with a lease on the commit we pushed). Returns the updated fields, or None.
+        Raises Conflict when the base branch changed the label file itself."""
+        with self._lock:
+            base = self._base_head()
+            if base == rec["base"]:
+                return None
+            if self._blob_at(base, rec["path"]) != rec.get("expected"):
+                raise Conflict(f"{rec['path']} changed on {self.base} while the PR was open")
+            commit = self._commit(base, rec["path"], rec["blob"], rec["message"], rec["author"])
             try:
-                self.gh.update_branch(rec["pr"], pr["head"]["sha"])
-                self.log.emit("pr_update_branch", pr=rec["pr"], stem=rec.get("stem"))
-            except GitHubError as e:
-                self.log.emit("pr_update_branch_failed", pr=rec["pr"], error=e.message)
-        return "open"
+                self._git("push", "--quiet", f"--force-with-lease=refs/heads/{rec['branch']}:{rec['commit']}",
+                          self.push_url, f"{commit}:refs/heads/{rec['branch']}")
+            except RuntimeError as e:
+                raise GitHubError(0, str(e)[-300:]) from None
+            self.log.emit("branch_rebased", stem=rec.get("stem"), branch=rec["branch"], base=base[:12])
+            return {"base": base, "commit": commit}
 
     def cleanup(self, rec: dict[str, Any]) -> None:
         try:
-            self.gh.delete_branch(rec["branch"])
-        except GitHubError:
-            pass  # already gone (or the repo deletes merged branches itself)
+            self._git("push", "--quiet", self.push_url, f":refs/heads/{rec['branch']}")
+        except RuntimeError:
+            pass  # already gone
 
 
 # --- the corpus checkout ---------------------------------------------------------------------------
@@ -591,10 +583,14 @@ class Checkout:
         self.rw = rw or RWLock()
         self.log = log or JsonLog()
 
-    def _git(self, *args: str, cwd: Path | None = None) -> str:
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    def git(self, *args: str, input: str | None = None, env: dict[str, str] | None = None) -> str:
+        return self._git(*args, input=input, env=env)
+
+    def _git(self, *args: str, cwd: Path | None = None, input: str | None = None,
+             env: dict[str, str] | None = None) -> str:
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})}
         r = subprocess.run(["git", *args], cwd=cwd or self.root, capture_output=True, text=True,
-                           timeout=600, env=env)
+                           timeout=600, env=env, input=input)
         if r.returncode:
             raise RuntimeError(f"git {' '.join(args[:2])} failed: {r.stderr.strip()[-400:]}")
         return r.stdout

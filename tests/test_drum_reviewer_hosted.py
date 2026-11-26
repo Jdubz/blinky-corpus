@@ -1,13 +1,16 @@
 """Hosted (multi-user) drum reviewer: locks, versions, drafts, rate limits, CORS, and the save ->
-pull request path against a fake GitHub (tests/fake_github.py). No network."""
+branch -> pull request path. Saves are pushed to a local bare git repository standing in for GitHub,
+and tests/fake_github.py serves the one (unauthenticated) pull-request lookup. No network."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.client
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -27,10 +30,10 @@ from fake_github import FakeGitHub  # noqa: E402
 
 DUR = 10.0
 REPO = "owner/corpus"
-TOKEN = "fake-token-for-tests"
 SITE = "https://site.example.invalid"
 KICKS = [0.5 + i for i in range(10)]
 SNARES = [1.0 + i for i in range(9)]
+HUMAN_A = "edm/drums_human/a.drums.json"
 
 
 def _w(path: Path, doc) -> Path:
@@ -62,17 +65,23 @@ def sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+def git(cwd, *args, input=None):
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                          cwd=cwd, check=True, capture_output=True, text=True, input=input).stdout
+
+
 @pytest.fixture
 def gh():
-    fake = FakeGitHub(REPO, TOKEN)
+    fake = FakeGitHub(REPO)
     url = fake.start()
     yield fake, url
     fake.stop()
 
 
 class Env:
-    def __init__(self, app, port, log, fake):
-        self.app, self.port, self.log, self.fake = app, port, log, fake
+    def __init__(self, app, port, log, fake, edm, origin=None, work=None):
+        self.app, self.port, self.log, self.fake, self.edm = app, port, log, fake, edm
+        self.origin, self.work = origin, work
 
     def req(self, method, path, body=None, client="client-aaaa", name="Ana", headers=None):
         h = {"Host": "api.example.invalid"}
@@ -98,22 +107,59 @@ class Env:
         evs = [json.loads(line) for line in self.log.getvalue().splitlines()]
         return [e for e in evs if name is None or e["event"] == name]
 
+    # -- the stand-in for GitHub's repo
+    def branches(self):
+        out = git(self.origin, "for-each-ref", "--format=%(refname:short)", "refs/heads/labels/")
+        return out.split()
+
+    def show(self, rev, path=None):
+        return git(self.origin, "show", f"{rev}:{path}" if path else rev)
+
+    def push_to_main(self, files: dict[str, str], msg="change on main"):
+        """Someone else's merge lands on main."""
+        git(self.work, "pull", "-q", "origin", "main")
+        for rel, text in files.items():
+            p = self.work / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text)
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-qm", msg)
+        git(self.work, "push", "-q", "origin", "HEAD:main")
+
 
 def make_env(edm, tmp_path, fake_url, fake, *, limits=None, publisher=True, trust_cf=False):
     log = io.StringIO()
     jl = hosted.JsonLog(log)
-    pub = hosted.Publisher(hosted.GitHub(REPO, TOKEN, fake_url), log=jl) if publisher else None
-    app = srv.HostedApp(srv.Corpus(edm), tmp_path / "state", pub, log=jl, limits=limits,
-                        trust_cf=trust_cf)
-    s = srv.make_server(edm, "127.0.0.1", 0, ("api.example.invalid",), app, (SITE,))
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    origin = work = None
+    corpus_edm = edm
+    pub = None
+    if publisher:
+        src = edm.parent
+        if not (src / ".git").exists():
+            git(src, "init", "-q", "-b", "main")
+            git(src, "add", "-A")
+            git(src, "commit", "-qm", "corpus")
+        origin = tmp_path / "origin.git"
+        git(tmp_path, "clone", "-q", "--bare", str(src), str(origin))
+        work = tmp_path / "work"
+        git(tmp_path, "clone", "-q", str(origin), str(work))
+        co = hosted.Checkout(tmp_path / "co", origin.as_uri(), log=jl)
+        co.ensure()
+        corpus_edm = co.root / "edm"
+        pub = hosted.GitPusher(co, origin.as_uri(), hosted.PublicGitHub(REPO, fake_url),
+                               poll_every=0, log=jl)
+    app = srv.HostedApp(srv.Corpus(corpus_edm), tmp_path / "state", pub,
+                        pub.co if pub else None, log=jl, limits=limits, trust_cf=trust_cf)
+    s = srv.make_server(corpus_edm, "127.0.0.1", 0, ("api.example.invalid",), app, (SITE,))
     threading.Thread(target=s.serve_forever, daemon=True).start()
-    return s, Env(app, s.server_address[1], log, fake)
+    return s, Env(app, s.server_address[1], log, fake, corpus_edm, origin, work)
 
 
 @pytest.fixture
 def env(edm, tmp_path, gh):
     fake, url = gh
-    s, e = make_env(edm, tmp_path, url, fake)
+    s, e = make_env(edm, tmp_path / "env", url, fake)
     yield e
     s.shutdown()
     s.server_close()
@@ -262,7 +308,7 @@ def test_bad_identity_headers(env):
     assert env.req("POST", "/api/lock?stem=a", {"action": "acquire"}, client=None)[0] == 400
 
 
-# --- saving -> pull request ----------------------------------------------------------------------
+# --- saving -> a pushed branch -> the workflow's pull request --------------------------------
 
 
 def test_incomplete_save_is_kept_as_draft(env):
@@ -270,88 +316,98 @@ def test_incomplete_save_is_kept_as_draft(env):
     st, _, b = env.req("POST", "/api/save?stem=a", seed_body(env, "a", ranges=[(0, 5)]))
     assert st == 422 and "100%" in b["error"]
     assert env.req("GET", "/api/track?stem=a")[2]["draft"]["reviewed_ranges"] == [[0, 5]]
-    assert not env.fake.prs
+    assert env.branches() == []
 
 
-def test_save_opens_a_pull_request(env, edm):
+def human_text(env, stem="a", kicks=KICKS):
+    """A valid human label file someone else saved (100% reviewed)."""
+    body = {"audio_sha256": sha(env.edm / f"{stem}.mp3"), "duration": DUR,
+            "started_from": {"source": "drums_adtof"}, "reviewed_ranges": [[0, DUR]],
+            "onsets": [{"time": t, "type": "kick"} for t in kicks] + [{"time": t, "type": "snare"} for t in SNARES]}
+    return labelcheck.dumps_doc(srv.validate_doc(env.app.c, stem, body, existing=None))
+
+
+def saved(env, stem="a"):
+    lock(env, stem)
+    st, _, b = env.req("POST", f"/api/save?stem={stem}", seed_body(env, stem))
+    assert st == 200, b
+    return b
+
+
+def test_save_pushes_one_commit_on_a_labels_branch(env):
     lock(env, "a")
     env.req("POST", "/api/draft?stem=a", seed_body(env, "a", ranges=[(0, 1)]))
     st, _, b = env.req("POST", "/api/save?stem=a", seed_body(env, "a"))
     assert st == 200, b
-    assert b["pr"] == 1 and b["automerge"] and b["url"].endswith("/pull/1")
-    f = env.fake
-    (commit,) = f.commits
-    assert commit["path"] == "edm/drums_human/a.drums.json"
-    assert commit["branch"].startswith("labels/a-")
-    msg = commit["message"]
+    (branch,) = env.branches()
+    assert b["branch"] == branch and branch.startswith("labels/a-") and b["pr"] is None
+    assert b["url"] == f"https://github.com/{REPO}/tree/{branch}"
+    # one commit on top of main, changing exactly the one label file
+    main = git(env.origin, "rev-parse", "main").strip()
+    assert git(env.origin, "rev-parse", f"{branch}^").strip() == main
+    assert git(env.origin, "diff", "--name-status", main, branch).split() == ["A", HUMAN_A]
+    msg = git(env.origin, "log", "-1", "--format=%B", branch)
     assert msg.startswith("labels(a): human drum labels, 10 kicks, 9 snares")
     assert "Contributed-by: Ana" in msg
     ip_hash = next(line.split(": ")[1] for line in msg.splitlines() if line.startswith("Client-IP-Hash"))
-    assert len(ip_hash) == 16 and int(ip_hash, 16) >= 0
-    assert "127.0.0.1" not in msg and "127.0.0.1" not in f.prs[1]["body"]
+    assert len(ip_hash) == 16 and "127.0.0.1" not in msg
+    assert git(env.origin, "log", "-1", "--format=%an", branch).strip() == "Ana (drum reviewer)"
     # the committed file is exactly what corpus CI accepts
-    doc = json.loads(commit["text"])
-    assert labelcheck.check_human_doc(edm, "a", doc, None, labelcheck.load_seeds()) == []
-    assert doc["complete"] and len(doc["onsets"]) == 19
-    pr = f.prs[1]
-    assert pr["base"] == "main" and pr["head"]["ref"] == commit["branch"]
-    assert f.automerge == [{"pr": 1, "merge_method": "SQUASH",
-                            "headline": "labels(a): human drum labels, 10 kicks, 9 snares",
-                            "body": f.automerge[0]["body"]}]
-    assert "Contributed-by: Ana" in f.automerge[0]["body"]  # the squash commit keeps the trailers
+    doc = json.loads(env.show(branch, HUMAN_A))
+    assert labelcheck.check_human_doc(env.edm, "a", doc, None, labelcheck.load_seeds()) == []
+    # the service's clone: working tree untouched
+    assert not (env.edm / "drums_human" / "a.drums.json").exists()
+    assert git(env.app.checkout.root, "status", "--porcelain") == ""
     # afterwards: pending, the lock released, the draft gone, the save logged
     t = env.req("GET", "/api/track?stem=a")[2]
-    assert t["pending"]["pr"] == 1 and t["seed"] == "human" and t["lock"] is None and t["draft"] is None
+    assert t["pending"]["branch"] == branch and t["pending"]["pr"] is None and t["seed"] == "human"
+    assert t["lock"] is None and t["draft"] is None
     (save,) = env.events("save")
-    assert save["stem"] == "a" and save["pr"] == 1 and save["contributor"] == "Ana" and save["ip"] == ip_hash
-    line = json.loads((env.app.state / "saves.jsonl").read_text())
-    assert line["pr"] == 1
+    assert save["branch"] == branch and save["contributor"] == "Ana" and save["ip"] == ip_hash
+    assert json.loads((env.app.state / "saves.jsonl").read_text())["branch"] == branch
+    # the workflow opens the PR; the next tick picks it up (one unauthenticated lookup)
+    env.fake.open_pr(branch)
+    env.app.tick()
+    t = env.req("GET", "/api/track?stem=a")[2]
+    assert t["pending"]["pr"] == 1 and t["pending"]["url"].endswith("/pull/1")
+    assert env.events("pr_opened")[0]["pr"] == 1 and env.fake.auth_seen == []  # no token, ever
     # a pending track takes no further save
     lock(env, "a")
     st, _, b = env.req("POST", "/api/save?stem=a", seed_body(env, "a"))
     assert st == 409 and "PR #1" in b["error"]
-    tr = {x["stem"]: x for x in env.req("GET", "/api/tracks")[2]["tracks"]}
-    assert tr["a"]["pending"]["pr"] == 1 and tr["a"]["complete"]
 
 
-def test_stale_version_is_refused(env, edm):
+def test_stale_version_is_refused(env):
     lock(env, "a")
     body = seed_body(env, "a")
     assert body["base_version"] == "none"
     # someone's save lands in the checkout meanwhile
-    human = edm / "drums_human" / "a.drums.json"
+    human = env.edm / "drums_human" / "a.drums.json"
     doc = srv.validate_doc(env.app.c, "a", {**body, "reviewed_ranges": [[0, DUR]]}, existing=None)
     human.parent.mkdir(exist_ok=True)
     human.write_text(labelcheck.dumps_doc(doc))
     st, _, b = env.req("POST", "/api/save?stem=a", body)
     assert st == 409 and "since you opened" in b["error"]
-    assert not env.fake.prs
+    human.unlink()
+    assert env.branches() == []
 
 
-def test_conflict_when_github_main_moved(env):
+def test_conflict_when_main_moved_under_the_file(env):
     lock(env, "a")
-    env.fake.set_main_file("edm/drums_human/a.drums.json", b"{}")
-    st, _, b = env.req("POST", "/api/save?stem=a", seed_body(env, "a"))
+    body = seed_body(env, "a")
+    env.push_to_main({HUMAN_A: human_text(env)})  # the clone hasn't refreshed: publish fetches, sees it
+    st, _, b = env.req("POST", "/api/save?stem=a", body)
     assert st == 409 and "changed" in b["error"]
-    assert not env.fake.prs and list(env.fake.branches) == ["main"]
-    assert env.req("GET", "/api/track?stem=a")[2]["draft"]  # the work is kept
+    assert env.branches() == [] and env.req("GET", "/api/track?stem=a")[2]["draft"]
 
 
-def test_github_failure_cleans_up(env):
+def test_push_failure_keeps_the_work(env):
     lock(env, "a")
-    env.fake.fail["put_file"] = 500
+    env.app.publisher.push_url = (env.origin.parent / "nowhere.git").as_uri()
     st, _, b = env.req("POST", "/api/save?stem=a", seed_body(env, "a"))
     assert st == 502 and "draft" in b["error"]
-    assert list(env.fake.branches) == ["main"] and len(env.fake.deleted) == 1
     assert env.req("GET", "/api/track?stem=a")[2]["pending"] is None
-    assert env.events("save_failed")
-
-
-def test_automerge_failure_still_opens_the_pr(env):
-    lock(env, "a")
-    env.fake.fail["automerge"] = 1
-    st, _, b = env.req("POST", "/api/save?stem=a", seed_body(env, "a"))
-    assert st == 200 and b["pr"] == 1 and b["automerge"] is False
+    assert env.req("GET", "/api/track?stem=a")[2]["draft"] and env.events("save_failed")
 
 
 def test_implausible_save_is_refused(env):
@@ -359,15 +415,14 @@ def test_implausible_save_is_refused(env):
     few = [{"time": 0.5, "type": "kick"}, {"time": 1.0, "type": "snare"}]
     st, _, b = env.req("POST", "/api/save?stem=a", seed_body(env, "a", onsets=few))
     assert st == 422 and any("deletes" in p for p in b["problems"])
-    assert not env.fake.prs and env.events("save_refused")
+    assert env.branches() == [] and env.events("save_refused")
 
 
 def test_save_rate_limit(edm, tmp_path, gh):
     fake, url = gh
-    s, e = make_env(edm, tmp_path, url, fake, limits={**srv.DEFAULT_LIMITS, "save": (1, 3600.0)})
+    s, e = make_env(edm, tmp_path / "e", url, fake, limits={**srv.DEFAULT_LIMITS, "save": (1, 3600.0)})
     try:
-        lock(e, "a")
-        assert e.req("POST", "/api/save?stem=a", seed_body(e, "a"))[0] == 200
+        saved(e, "a")
         lock(e, "b")
         st, h, b = e.req("POST", "/api/save?stem=b", seed_body(e, "b"))
         assert st == 429 and int(h["Retry-After"]) > 0
@@ -379,7 +434,7 @@ def test_save_rate_limit(edm, tmp_path, gh):
 
 def test_lock_grab_rate_limit(edm, tmp_path, gh):
     fake, url = gh
-    s, e = make_env(edm, tmp_path, url, fake, limits={**srv.DEFAULT_LIMITS, "lock": (2, 3600.0)})
+    s, e = make_env(edm, tmp_path / "e", url, fake, limits={**srv.DEFAULT_LIMITS, "lock": (2, 3600.0)})
     try:
         assert lock(e, "a")[0] == 200
         assert lock(e, "a")[0] == 200  # renewing your own lock is free
@@ -392,7 +447,7 @@ def test_lock_grab_rate_limit(edm, tmp_path, gh):
 
 def test_publishing_disabled(edm, tmp_path, gh):
     fake, url = gh
-    s, e = make_env(edm, tmp_path, url, fake, publisher=False)
+    s, e = make_env(edm, tmp_path / "e", url, fake, publisher=False)
     try:
         assert e.req("GET", "/api/config")[2]["saving"] is False
         lock(e, "a")
@@ -404,51 +459,112 @@ def test_publishing_disabled(edm, tmp_path, gh):
         s.server_close()
 
 
-# --- following the pull request ------------------------------------------------------------------
+# --- following the branch and its pull request --------------------------------------------------
 
 
-def saved(env):
-    lock(env, "a")
-    st, _, b = env.req("POST", "/api/save?stem=a", seed_body(env, "a"))
-    assert st == 200
-    return env.fake.commits[0]
-
-
-def test_merged_then_landed(env, edm):
-    commit = saved(env)
+def test_merged_then_landed(env):
+    b = saved(env)
+    text = env.show(b["branch"], HUMAN_A)
     env.app.tick()
-    assert env.app.pending.get("a")["state"] == "open"
-    env.fake.prs[1]["merged"] = True
-    env.fake.prs[1]["state"] = "closed"
+    assert env.app.pending.get("a")["state"] == "open"  # no PR yet: waiting for the workflow
+    env.fake.open_pr(b["branch"])
+    env.fake.prs[1].update(state="closed", merged_at="2026-11-26T00:00:00Z")
     env.app.tick()
-    assert env.app.pending.get("a")["state"] == "merged"
-    assert commit["branch"] in env.fake.deleted
-    # still shown as pending until the checkout has the file
+    assert env.app.pending.get("a")["state"] == "merged" and env.branches() == []  # branch deleted
     assert env.req("GET", "/api/track?stem=a")[2]["pending"]["state"] == "merged"
-    hp = edm / "drums_human" / "a.drums.json"
-    hp.parent.mkdir(exist_ok=True)
-    hp.write_text(commit["text"])
-    env.app.tick()
+    env.push_to_main({HUMAN_A: text}, "the squash merge")
+    env.app.tick()  # refreshes the clone, sees the file landed
     assert env.app.pending.get("a") is None
     t = env.req("GET", "/api/track?stem=a")[2]
     assert t["pending"] is None and t["seed"] == "human" and t["version"].startswith("m-")
 
 
 def test_closed_pr_comes_back_as_a_draft(env):
-    commit = saved(env)
+    b = saved(env)
+    onsets = json.loads(env.show(b["branch"], HUMAN_A))["onsets"]
+    env.fake.open_pr(b["branch"])
     env.fake.prs[1]["state"] = "closed"
     env.app.tick()
     assert env.app.pending.get("a") is None and env.events("pr_closed")
     t = env.req("GET", "/api/track?stem=a")[2]
-    assert t["pending"] is None and t["draft"]["onsets"] == json.loads(commit["text"])["onsets"]
-    assert commit["branch"] in env.fake.deleted
+    assert t["pending"] is None and t["draft"]["onsets"] == onsets
+    assert env.branches() == []
 
 
-def test_behind_branch_is_updated(env):
-    saved(env)
-    env.fake.prs[1]["mergeable_state"] = "behind"
+def test_branch_is_rebuilt_when_main_moves(env):
+    b = saved(env)
+    env.fake.open_pr(b["branch"])
+    env.push_to_main({"README.md": "someone else's change\n"})
     env.app.tick()
-    assert env.fake.updated_branches == [1]
+    main = git(env.origin, "rev-parse", "main").strip()
+    assert git(env.origin, "rev-parse", f"{b['branch']}^").strip() == main  # up to date again
+    assert git(env.origin, "diff", "--name-only", main, b["branch"]).split() == [HUMAN_A]
+    assert env.app.pending.get("a")["base"] == main and env.events("branch_rebased")
+    env.app.tick()  # nothing more to do
+    assert len(env.events("branch_rebased")) == 1
+
+
+def test_main_changing_the_same_file_ends_the_save(env):
+    b = saved(env)
+    env.fake.open_pr(b["branch"])
+    env.push_to_main({HUMAN_A: human_text(env, kicks=KICKS[:-1])}, "a different save of the same track")
+    env.app.tick()
+    assert env.app.pending.get("a") is None and env.events("pr_conflict")
+    assert env.req("GET", "/api/track?stem=a")[2]["draft"]  # the labels are back as a draft
+    assert env.branches() == []
+
+
+def test_lookup_failures_and_throttling(env):
+    b = saved(env)
+    env.fake.fail_next = 403  # e.g. the unauthenticated rate limit
+    env.app.tick()
+    assert env.events("pr_poll_failed") and env.app.pending.get("a")["state"] == "open"
+    clock = [100.0]
+    p = hosted.GitPusher(env.app.checkout, env.origin.as_uri(), env.app.publisher.gh,
+                         poll_every=65, clock=lambda: clock[0])
+    rec = env.app.pending.get("a")
+    assert p.poll(rec)[0] == "waiting"
+    assert p.poll(rec)[0] == "skip"  # at most one lookup per 65 s across all saves
+    clock[0] += 66
+    env.fake.open_pr(b["branch"])
+    assert p.poll(rec)[0] == "open"
+
+
+def test_ssh_pushes_pin_github_host_keys(tmp_path):
+    co = hosted.Checkout(tmp_path / "co", "file:///x")
+    gh = hosted.PublicGitHub(REPO)
+    with pytest.raises(ValueError):
+        hosted.GitPusher(co, "ssh://git@ssh.github.com:443/owner/corpus.git", gh)
+    p = hosted.GitPusher(co, "ssh://git@ssh.github.com:443/owner/corpus.git", gh,
+                         key_file=tmp_path / "k", known_hosts=TOOLS / "github_known_hosts")
+    cmd = p._env["GIT_SSH_COMMAND"]
+    assert "StrictHostKeyChecking=yes" in cmd and f"UserKnownHostsFile={TOOLS / 'github_known_hosts'}" in cmd
+    assert "GlobalKnownHostsFile=/dev/null" in cmd and "IdentitiesOnly=yes" in cmd
+
+
+def test_known_hosts_are_githubs_published_keys():
+    # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+    published = {"SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU", "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM",
+                 "SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s"}
+    out = subprocess.run(["ssh-keygen", "-lf", str(TOOLS / "github_known_hosts")], capture_output=True,
+                         text=True, check=True).stdout.splitlines()
+    by_host: dict[str, set[str]] = {}
+    for line in out:
+        bits, fp, host = line.split()[:3]
+        by_host.setdefault(host, set()).add(fp)
+    assert by_host == {"github.com": published, "[ssh.github.com]:443": published}
+
+
+def test_deploy_key_file(tmp_path):
+    assert srv.deploy_key_file("") is None
+    with pytest.raises(SystemExit):
+        srv.deploy_key_file(base64.b64encode(b"not a key").decode())
+    key = b"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n"
+    p = srv.deploy_key_file(base64.b64encode(key).decode())
+    try:
+        assert p.read_bytes() == key and (p.stat().st_mode & 0o777) == 0o600 and str(p).startswith("/tmp/")
+    finally:
+        os.unlink(p)
 
 
 # --- HTTP surface: CORS, client address, headers, logs -------------------------------------------

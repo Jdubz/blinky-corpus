@@ -1,0 +1,53 @@
+name: Label PRs
+
+# The hosted drum reviewer (tools/drum-reviewer, hosted mode) pushes each completed save as a branch
+# labels/<track>-<id>: one commit, one human label file, on top of main. It does so with a deploy key
+# (write access to this repo only) and holds no GitHub token, so this workflow opens the pull request
+# and turns on auto-merge (squash).
+#
+# What gates the merge is the required "Scoring tests" check: tests.yml runs on the same push
+# (push: labels/**) and its label checks (labelcheck.py: one file, the schema, 100% reviewed,
+# plausible against what it replaces) close the PR if they fail. A PR opened with GITHUB_TOKEN starts
+# no pull_request workflows, which is why the check comes from that push run.
+#
+# Runs again on every push to the branch (the service rebuilds it on main when main moves, since main
+# requires up-to-date branches): it finds the open PR and makes sure auto-merge is on.
+
+on:
+  push:
+    branches: ['labels/**']
+
+concurrency:
+  group: labels-pr-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # auto-merge merges as this token's actor, so it needs merge rights
+  pull-requests: write  # open the PR, turn on auto-merge
+
+jobs:
+  open:
+    name: Open the PR, auto-merge on
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 2
+    - name: Open or find the PR, then turn on auto-merge (squash)
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BRANCH: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        subject=$(git log -1 --format=%s HEAD)
+        body=$(git log -1 --format=%b HEAD)
+        pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number -q '.[0].number')
+        if [ -z "$pr" ]; then
+          url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+                  --title "$subject" --body "$body")
+          pr=${url##*/}
+          echo "opened #$pr"
+        fi
+        # The squash commit keeps the contributor trailers (the commit body).
+        gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash --subject "$subject (#$pr)" --body "$body"
+        echo "auto-merge on for #$pr"

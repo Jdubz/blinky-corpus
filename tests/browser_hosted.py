@@ -3,18 +3,20 @@
 origin (the product site), the API on another (CORS). CI runs it with Playwright's Chromium:
 
     python tests/browser_hosted.py --page http://127.0.0.1:8000/ --api http://127.0.0.1:8767 \\
-        --fake http://127.0.0.1:9999
+        --remote /path/to/bare.git
 
 Two people open the same track: the first gets the edit lock, the second gets a view-only page that
-names the first and refuses edits. The first reviews the whole track and submits it, which opens a
-pull request (on the fake GitHub). Fails on any page error.
+names the first and refuses edits. The first reviews the whole track and submits it, which pushes a
+labels/ branch (to --remote, the stand-in for GitHub). Fails on any page error.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
+import time
 import urllib.request
 
 from playwright.sync_api import sync_playwright
@@ -33,10 +35,19 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--page", required=True)
     ap.add_argument("--api", required=True)
-    ap.add_argument("--fake", required=True)
+    ap.add_argument("--remote", required=True, help="the bare repository the server pushes to")
     args = ap.parse_args()
-    with urllib.request.urlopen(args.api + "/api/tracks", timeout=10) as r:
-        stem = next(t["stem"] for t in json.loads(r.read())["tracks"] if not t["has_human"] and not t["pending"])
+    deadline = time.monotonic() + 180  # the server clones the corpus before it listens
+    while True:
+        try:
+            with urllib.request.urlopen(args.api + "/api/tracks", timeout=10) as r:
+                tracks = json.loads(r.read())["tracks"]
+            break
+        except OSError:
+            if time.monotonic() > deadline:
+                check(False, "the API answered within 180 s")
+            time.sleep(2)
+    stem = next(t["stem"] for t in tracks if not t["has_human"] and not t["pending"])
 
     errors: list[str] = []
     with sync_playwright() as p:
@@ -79,12 +90,13 @@ def main() -> None:
         check(True, "the draft autosaves")
         ana.locator("#overlay").click()
         ana.keyboard.press("Control+s")
-        ana.wait_for_function("S.readOnly && S.meta.pending && S.meta.pending.pr === 1", timeout=30000)
-        check("pull request #1" in ana.inner_text("#banner-warn"), "Ana's submit opens pull request #1")
-        with urllib.request.urlopen(args.fake + "/_fake/state", timeout=10) as r:
-            st = json.loads(r.read())
-        check(len(st["commits"]) == 1 and "Contributed-by: Ana" in st["commits"][0]["message"],
-              "the pull request carries Ana's name")
+        ana.wait_for_function("S.readOnly && S.meta.pending && S.meta.pending.branch", timeout=30000)
+        branch = ana.evaluate("S.meta.pending.branch")
+        check(branch.startswith(f"labels/{stem}-") and branch in ana.inner_text("#banner-warn"),
+              f"Ana's submit pushes {branch}")
+        msg = subprocess.run(["git", "-C", args.remote, "log", "-1", "--format=%B", branch],
+                             capture_output=True, text=True, check=True).stdout
+        check("Contributed-by: Ana" in msg, "the commit carries Ana's name")
         browser.close()
     check(not errors, "no page errors" + ("" if not errors else ": " + " | ".join(errors[:5])))
     print("browser: all checks passed")
