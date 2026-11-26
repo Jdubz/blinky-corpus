@@ -14,11 +14,11 @@ python tools/drum-reviewer/server.py --port 8770 --edm path/to/edm --allow-host 
 
 The page answers only under an IP address, `localhost` or this machine's hostname. For another name, such as a DNS alias, add `--allow-host NAME`. Writes must be same-origin `application/json` POSTs. Together these stop other web pages open in your browser from writing labels, including through DNS rebinding.
 
-Open the page in a desktop Chrome or Firefox. The track list (`T`) ranks unfinished tracks worst first, by how much ADTOF and the old band labels disagree. It also shows each track's reviewed share, counts and whether a draft exists.
+Open the page in a desktop Chrome or Firefox. **Help** (or `?`) opens an overlay that explains the page and the review steps; it opens by itself on the first visit. **⚙ Settings** holds every option, each with a plain description: label clicks, volumes, speed, loop, band solo, snapping, reference and hi-hat ticks. Settings are remembered in the browser. The track list (`T`) ranks unfinished tracks worst first, by how much ADTOF and the old band labels disagree. It also shows each track's reviewed share, counts and whether a draft exists.
 
 ## A review pass
 
-1. Open a track. The default view is 6 s. Press `L` to loop the visible range, then `Space`. The music plays with a low click on every kick and a high click on every snare.
+1. Open a track. The default view is 6 s. Press `L` to loop the visible range, then `Space`. Label clicks are **off by default**: turn them on in Settings (or `Shift+K` / `Shift+S`) to hear a low click on every kick and a high click on every snare. The toolbar chip shows which are on.
 2. Fix what sounds or looks wrong. Hover over a hit and press `K` or `S` to add one, `X` deletes, `C` swaps the class, and `←`/`→` nudge by 1 ms (`Shift` for 5 ms). `N` snaps to the attack. `1`/`2`/`3` slow playback down. `Shift+K`/`Shift+S` mute one click track. `B` solos the low or mid band.
 3. `Enter` marks the screen reviewed and moves to the next one (with 10% overlap). Looping playback follows.
 4. When the track is 100% reviewed, save with `Ctrl+S`. `U` jumps to any gap you skipped.
@@ -33,7 +33,7 @@ Every edit autosaves a draft to `edm/drums_human/.drafts/` (gitignored). Reopeni
 | spectrogram | 30 Hz–12 kHz, log frequency, 10 ms frames |
 | waveform | full-band, down to individual samples; every label is drawn through it |
 | kick | 30–150 Hz: envelope (fill) and onset strength (line); kick markers |
-| snare | 150 Hz–5 kHz: envelope and onset strength; snare markers; ADTOF hi-hats as faint read-only ticks along the top |
+| snare | 150 Hz–5 kHz: envelope and onset strength; snare markers; optionally ADTOF hi-hats as faint read-only ticks along the top (Settings, off by default) |
 | reviewed | reviewed ranges (green) and unreviewed ones (red) |
 
 The `ref` menu draws ghost ticks along the bottom of each lane from ADTOF or the old band labels, for comparison. Band filtering is zero-phase (forward-backward Butterworth), so the lanes have no filter delay.
