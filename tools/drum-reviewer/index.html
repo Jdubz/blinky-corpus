@@ -539,6 +539,10 @@ function drawMarkers(g) {
 function playPos() { return P.playing ? posAt(actx.currentTime - (actx.outputLatency || 0)) : S.cursor; }
 function drawOverlay() {
   const g = cvOv.getContext("2d"); g.setTransform(DPR, 0, 0, DPR, 0, 0); g.clearRect(0, 0, W, STACK_H);
+  // The grabbable marker under the mouse, recomputed on every redraw (not only on mousemove), so a
+  // delete, class swap, undo/redo or zoom never leaves a stale highlight or grab cursor behind.
+  S.hoverHit = S.duration && S.hover && !S.drag ? hitMarker(S.hover.x, S.hover.lane) : null;
+  if (!S.drag) cvOv.style.cursor = S.hoverHit ? "grab" : "crosshair";
   if (!S.duration) return;
   if (S.hoverHit && !S.drag) {
     const o = S.hoverHit, L = LANE[o.type], x = Math.round(t2x(o.time)) + 0.5;
@@ -920,8 +924,7 @@ window.addEventListener("mousemove", (e) => {
   const { x, y } = evPos(e), inside = x >= 0 && x <= W && y >= 0 && y <= STACK_H;
   S.hover = inside ? { x, t: x2t(x), lane: laneAt(y) } : null;
   const d = S.drag;
-  if (!d) { const h = inside ? hitMarker(x, laneAt(y)) : null; S.hoverHit = h; cvOv.style.cursor = h ? "grab" : "crosshair"; }
-  else if (d.kind === "move") cvOv.style.cursor = "grabbing";
+  if (d && d.kind === "move") cvOv.style.cursor = "grabbing";
   if (d && d.kind === "move") {
     if (!d.moved && Math.abs(x - d.x0) > 2) { d.moved = true; checkpoint(); }
     if (d.moved) { const dt = (x - d.x0) * S.view.dur / W; for (const o of S.onsets) if (d.orig.has(o.id)) o.time = clamp(d.orig.get(o.id) + dt, 0, S.duration); drawMain(); }
@@ -932,7 +935,6 @@ window.addEventListener("mousemove", (e) => {
 });
 window.addEventListener("mouseup", (e) => {
   const d = S.drag; if (!d) return; S.drag = null;
-  cvOv.style.cursor = S.hoverHit ? "grab" : "crosshair";
   if (d.kind === "move") {
     if (d.moved) { edited(); const o = d.hit; S.lastSnap = `moved to ${o.time.toFixed(4)} s (N to snap)`; }
     else { S.cursor = d.hit.time; if (P.playing) restartIfPlaying(d.hit.time - 0.5); }
