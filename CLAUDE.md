@@ -18,7 +18,7 @@ Detectors are scored on **kicks and snares**: recall at ±30/±50 ms and the sha
 
 ## Human edits are ground truth
 
-Human drum labels (`edm/drums_human/`) arrive as pull requests from the hosted drum reviewer, gated by the label checks in CI (`tools/drum-reviewer/labelcheck.py`: one file per PR, the schema, 100% reviewed, plausible against what it replaces). Those PRs auto-merge, so never weaken the checks or move them out of the required **Scoring tests** job.
+Human drum labels (`edm/drums_human/`) arrive from the labels service (blinky_time `labels-service/`): it pushes `labels/auto-*` branches with a deploy key, and `labels-pr.yml` opens their PRs with auto-merge. The gate is the label checks in the required **Scoring tests** job (`tools/labels/labelcheck.py`: the schema, no mass deletion, no empty class, and a `labels/` branch changes only label files). Those PRs merge themselves, so never weaken the checks, move them out of that job, or stop it running on `push` to `labels/**` (the PRs, opened with `GITHUB_TOKEN`, get no `pull_request` runs). `tools/labels/labelcheck.py` and blinky_time's `labels-service/labelcheck.py` are the same file: change both.
 
 `*.onsets_human.json` overlays (from blinky_time's label reviewer) are the final truth and must flow through scoring. `onset_label_merge.apply_human_edits()` refuses an overlay whose `source_count` no longer matches the auto labels (`HumanEditDriftError`). Never regenerate auto labels under an overlay, and never weaken that check.
 

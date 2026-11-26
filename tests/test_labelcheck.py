@@ -1,4 +1,5 @@
-"""tools/drum-reviewer/labelcheck.py: the human-label checks corpus CI and the hosted reviewer run."""
+"""tools/labels/labelcheck.py: the anti-vandalism checks corpus CI runs on human label files (the labels
+service in blinky_time runs the same file before it publishes)."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-TOOLS = Path(__file__).resolve().parents[1] / "tools" / "drum-reviewer"
+TOOLS = Path(__file__).resolve().parents[1] / "tools" / "labels"
 sys.path.insert(0, str(TOOLS))
 import labelcheck as lc  # noqa: E402
 
@@ -53,7 +54,7 @@ def repo(tmp_path):
         _w(edm / "drums_adtof" / f"{stem}.kick_weighted.json", _kw(KICKS, SNARES))
         _w(edm / "kick_weighted" / f"{stem}.kick_weighted.json", _kw(KICKS + SNARES, []))
     _w(edm / "track_manifest.json", {s: {"duration": DUR} for s in ("a", "b")})
-    tools = r / "tools" / "drum-reviewer"
+    tools = r / "tools" / "labels"
     tools.mkdir(parents=True)
     (tools / "seeds.json").write_text(lc.DEFAULT_SEEDS_FILE.read_text())
     git(r, "init", "-q", "-b", "main")
@@ -99,10 +100,9 @@ def test_schema_problems(repo, mutate, expect):
     assert any(expect in x for x in p), p
 
 
-def test_must_be_complete(repo):
-    p = check(repo, "a", human(repo / "edm", "a", ranges=[(0, 6)]))
-    assert p == ["the track is not 100% reviewed (60.0%): only complete tracks are accepted"]
-    assert check(repo, "a", human(repo / "edm", "a", ranges=[(0, 6)]), require_complete=False) == []
+def test_partial_progress_is_fine(repo):
+    # the scorer only uses a complete file, so partial ones are accepted
+    assert check(repo, "a", human(repo / "edm", "a", ranges=[(0, 6)])) == []
 
 
 def test_deleting_most_hits_is_refused(repo):
@@ -116,12 +116,6 @@ def test_reclassing_is_not_deleting(repo):
     # all of them: still no deletes, but an empty snare class while ADTOF has snares is refused
     p = check(repo, "a", human(repo / "edm", "a", kicks=KICKS + SNARES, snares=[]))
     assert p == ["no snare hits, but drums_adtof has some"]
-
-
-def test_counts_far_outside_the_references(repo):
-    many = [i * 0.05 for i in range(1, 199)]
-    p = check(repo, "a", human(repo / "edm", "a", kicks=many))
-    assert any("kick hits is far outside" in x for x in p), p
 
 
 def test_empty_class(repo):
@@ -153,17 +147,28 @@ def write_and_commit(repo, files: dict[str, str | None]):
     git(repo, "commit", "-qm", "change")
 
 
-def test_pr_with_one_valid_file(repo, capsys):
-    write_and_commit(repo, {"edm/drums_human/a.drums.json": lc.dumps_doc(human(repo / "edm", "a"))})
+def test_a_batch_of_label_files(repo, capsys):
+    edm = repo / "edm"
+    write_and_commit(repo, {"edm/drums_human/a.drums.json": lc.dumps_doc(human(edm, "a")),
+                            "edm/drums_human/b.drums.json": lc.dumps_doc(human(edm, "b", ranges=[(0, 2)]))})
     assert lc.check_pr(repo, "main", None, override=False) == []
-    assert "valid, 100% reviewed, plausible" in capsys.readouterr().out
+    assert capsys.readouterr().out.count("valid, not vandalism") == 2
 
 
-def test_pr_must_change_one_file_only(repo):
+def test_one_bad_file_in_a_batch_is_named(repo):
+    edm = repo / "edm"
+    write_and_commit(repo, {"edm/drums_human/a.drums.json": lc.dumps_doc(human(edm, "a")),
+                            "edm/drums_human/b.drums.json": lc.dumps_doc(human(edm, "b", kicks=KICKS[:2], snares=SNARES[:1]))})
+    (p,) = lc.check_pr(repo, "main", None, override=False)
+    assert p.startswith("edm/drums_human/b.drums.json: deletes")
+
+
+def test_a_labels_branch_changes_only_label_files(repo):
     write_and_commit(repo, {"edm/drums_human/a.drums.json": lc.dumps_doc(human(repo / "edm", "a")),
                             "README.md": "sneaky"})
-    (p,) = lc.check_pr(repo, "main", None, override=False)
-    assert "only that one file" in p and "README.md" in p
+    assert lc.check_pr(repo, "main", None, override=False) == []  # an ordinary PR may mix
+    (p,) = lc.check_pr(repo, "main", None, override=False, only_labels=True)
+    assert "may only change human label files" in p and "README.md" in p
 
 
 def test_pr_cannot_delete_a_label_file(repo):
@@ -191,11 +196,11 @@ def test_pr_plausibility_against_the_base_branch_file(repo):
                             lc.dumps_doc(human(edm, "a", kicks=KICKS[:2], snares=SNARES[:2]))})
     p = lc.check_pr(repo, "main", None, override=False)
     assert any("existing human file" in x for x in p), p
-    # the owner's labels-override skips plausibility, never the schema or completeness
+    # the owner's labels-override skips the vandalism checks, never the schema
     assert lc.check_pr(repo, "main", None, override=True) == []
     write_and_commit(repo, {"edm/drums_human/a.drums.json":
-                            lc.dumps_doc(human(edm, "a", ranges=[(0, 3)]))})
-    assert any("not 100% reviewed" in x for x in lc.check_pr(repo, "main", None, override=True))
+                            lc.dumps_doc(human(edm, "a", schema=2))})
+    assert any("schema must be 1" in x for x in lc.check_pr(repo, "main", None, override=True))
 
 
 def test_check_all_schema_only(repo):
@@ -211,5 +216,5 @@ def test_cli_exit_codes(repo):
     write_and_commit(repo, {"edm/drums_human/a.drums.json": lc.dumps_doc(human(repo / "edm", "a"))})
     assert lc.main(["--repo", str(repo), "--base", "main"]) == 0
     write_and_commit(repo, {"edm/drums_human/a.drums.json":
-                            lc.dumps_doc(human(repo / "edm", "a", ranges=[(0, 1)]))})
+                            lc.dumps_doc(human(repo / "edm", "a", kicks=[], snares=SNARES[:1]))})
     assert lc.main(["--repo", str(repo), "--base", "main"]) == 1

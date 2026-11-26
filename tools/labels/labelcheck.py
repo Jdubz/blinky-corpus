@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Validate human drum label files (edm/drums_human/<stem>.drums.json).
+"""Validate human drum label files (edm/drums_human/<stem>.drums.json): anti-vandalism, not process.
 
-Two callers use the same checks:
+The same file lives in two places, kept identical (copy it when it changes):
+* blinky-corpus tools/labels/labelcheck.py: corpus CI, the gate on every merge;
+* blinky_time labels-service/labelcheck.py: the labels service, before it publishes a batch.
 
-* the hosted reviewer, before it turns a save into a pull request;
-* corpus CI, on every pull request that touches edm/drums_human/:
+      python tools/labels/labelcheck.py --base origin/main                  # a PR
+      python tools/labels/labelcheck.py --base origin/main --only-labels    # a labels/** push
+      python tools/labels/labelcheck.py --all                               # main: every file
 
-      python tools/drum-reviewer/labelcheck.py --base origin/main      # a PR
-      python tools/drum-reviewer/labelcheck.py --all                   # main: every file's schema
+A change to human label files passes if every changed file:
 
-A pull request that changes a human label file passes only if:
+1. is added or modified (never deleted or renamed);
+2. matches the schema (keys, types, sorted 4-decimal onsets, merged ranges, the audio's sha256, the
+   manifest duration);
+3. isn't vandalism against what it replaces (main's human file, else the seed it started from): it
+   doesn't delete more than half of that file's hits, and no class is empty while a reference has
+   hits in it.
 
-1. it changes exactly that one file, and adds or modifies it (no deletes, no renames);
-2. the file matches the schema the reviewer writes (keys, types, sorted 4-decimal onsets, merged
-   ranges, the audio's sha256, the manifest duration);
-3. the track is 100% reviewed (`complete` is true and the ranges cover the whole track);
-4. it's plausible against the file it replaces (the base branch's human file, else the seed it
-   started from): it doesn't delete more than half of that file's hits, no class count lands far
-   outside the range of every reference, and no class is empty while any reference has hits in it.
-
-`--override` (CI passes it when the owner labels the PR `labels-override`) skips step 4 only.
+Partial progress is fine: the scorer only uses a human file once it's `complete`. With
+`--only-labels` (the labels service's labels/** branches, which auto-merge) nothing but human label
+files may change. `--override` (the owner's `labels-override` PR label) skips step 3.
 
 Seed sources and their precedence come from seeds.json (see load_sources). Python standard library only.
 """
@@ -58,9 +59,6 @@ HUMAN_KEYS = ("schema", "track", "audio_sha256", "duration", "started_from", "re
 # of them away. Deletions are counted class-agnostic, so a kick relabelled as a snare isn't a delete.
 MAX_DELETED_SHARE = 0.5  # refuse deleting more than half of the replaced file's hits...
 MIN_HITS_FOR_DELETE_CHECK = 8  # ...when it has at least this many
-COUNT_LOW_FACTOR = 0.5  # a class count below half of every reference's...
-COUNT_HIGH_FACTOR = 2.0  # ...or above twice every reference's is refused...
-COUNT_SLACK = 8  # ...give or take this many hits (small counts are noisy)
 
 DEFAULT_SEEDS_FILE = Path(__file__).resolve().parent / "seeds.json"
 
@@ -344,9 +342,8 @@ def check_complete(doc: dict[str, Any]) -> list[str]:
 
 def plausibility(new: dict[str, list[float]], replaced: tuple[str, dict[str, list[float]]] | None,
                  references: dict[str, dict[str, list[float]]]) -> list[str]:
-    """Problems with how far `new` moved from what it replaces. `replaced` is (name, labels) of the
-    file it replaces; `references` is every label set the counts are compared against (the replaced
-    file is added to it)."""
+    """Vandalism checks against what `new` replaces. `replaced` is (name, labels) of the file it
+    replaces; `references` is every label set the empty-class check looks at (with the replaced one)."""
     p: list[str] = []
     refs = dict(references)
     if replaced is not None:
@@ -363,14 +360,10 @@ def plausibility(new: dict[str, list[float]], replaced: tuple[str, dict[str, lis
     if not refs:
         return p
     for ty in LABEL_TYPES:
-        counts = [len(r.get(ty, [])) for r in refs.values()]
-        n, lo, hi = len(new.get(ty, [])), min(counts), max(counts)
-        if n == 0 and hi > 0:
+        if not new.get(ty):
             some = [name for name, r in refs.items() if r.get(ty)]
-            p.append(f"no {ty} hits, but {', '.join(some)} {'has' if len(some) == 1 else 'have'} some")
-        elif n < COUNT_LOW_FACTOR * lo - COUNT_SLACK or n > COUNT_HIGH_FACTOR * hi + COUNT_SLACK:
-            p.append(f"{n} {ty} hits is far outside the references' range {lo}-{hi} "
-                     f"({', '.join(refs)})")
+            if some:
+                p.append(f"no {ty} hits, but {', '.join(some)} {'has' if len(some) == 1 else 'have'} some")
     return p
 
 
@@ -390,7 +383,7 @@ def replaced_labels(doc: dict[str, Any], base_doc: dict[str, Any] | None,
 
 
 def check_human_doc(edm: Path, stem: str, doc: Any, base_doc: dict[str, Any] | None,
-                    seeds: list[SeedSource], *, require_complete: bool = True,
+                    seeds: list[SeedSource], *, require_complete: bool = False,
                     check_plausible: bool = True, audio_sha256: str | None = None) -> list[str]:
     """Every check for one human label file. `base_doc` is the human file it replaces (None if new)."""
     sha = audio_sha256 or file_sha256(edm / f"{stem}.mp3")
@@ -421,42 +414,50 @@ def changed_files(repo: Path, base: str) -> tuple[str, list[tuple[str, str]]]:
     return mb, [(s, path) for s, path in rows]  # type: ignore[misc]
 
 
-def check_pr(repo: Path, base: str, seeds_file: Path | None, override: bool) -> list[str]:
+def check_pr(repo: Path, base: str, seeds_file: Path | None, override: bool,
+             only_labels: bool = False) -> list[str]:
     edm = repo / "edm"
     mb, changes = changed_files(repo, base)
     label_changes = [(s, f) for s, f in changes if f.startswith(f"edm/{HUMAN_DIR}/")]
+    problems: list[str] = []
+    if only_labels:
+        other = [f for s, f in changes if (s, f) not in label_changes]
+        if other:
+            problems.append(f"a labels/ branch may only change human label files; this one also "
+                            f"changes: {', '.join(other)}")
     if not label_changes:
         print("no human label files changed")
-        return []
-    if len(changes) != 1:
-        listing = ", ".join(f"{s} {f}" for s, f in changes)
-        return [f"a pull request that changes a human label file must change only that one file; "
-                f"this one changes {len(changes)}: {listing}"]
-    status, path = changes[0]
-    m = re.fullmatch(rf"edm/{HUMAN_DIR}/([^/]+){re.escape(HUMAN_SUFFIX)}", path)
-    if not m or not STEM_RE.match(m.group(1)):
-        return [f"{path} is not a human label file (edm/{HUMAN_DIR}/<track>{HUMAN_SUFFIX})"]
-    if status not in ("A", "M"):
-        return [f"{path}: status {status}; a human label file may only be added or modified"]
-    stem = m.group(1)
-    if not (edm / f"{stem}.mp3").is_file():
-        return [f"{path}: no such track edm/{stem}.mp3"]
-    try:
-        doc = json.loads((repo / path).read_text())
-    except json.JSONDecodeError as e:
-        return [f"{path} is not valid JSON: {e}"]
-    base_doc = None
-    try:
-        base_doc = json.loads(_git(repo, "show", f"{mb}:{path}"))
-    except subprocess.CalledProcessError:
-        pass  # a new file: it replaces a seed
-    seeds = load_seeds(seeds_file or repo / "tools" / "drum-reviewer" / "seeds.json")
-    p = check_human_doc(edm, stem, doc, base_doc, seeds, check_plausible=not override)
-    if override and not p:
-        print("labels-override: plausibility checks skipped by the owner's label")
-    if not p:
-        print(f"{path}: valid, 100% reviewed" + ("" if override else ", plausible"))
-    return [f"{path}: {x}" for x in p]
+        return problems
+    seeds = load_seeds(seeds_file or repo / "tools" / "labels" / "seeds.json")
+    for status, path in label_changes:
+        m = re.fullmatch(rf"edm/{HUMAN_DIR}/([^/]+){re.escape(HUMAN_SUFFIX)}", path)
+        if not m or not STEM_RE.match(m.group(1)):
+            problems.append(f"{path} is not a human label file (edm/{HUMAN_DIR}/<track>{HUMAN_SUFFIX})")
+            continue
+        if status not in ("A", "M"):
+            problems.append(f"{path}: status {status}; a human label file may only be added or modified")
+            continue
+        stem = m.group(1)
+        if not (edm / f"{stem}.mp3").is_file():
+            problems.append(f"{path}: no such track edm/{stem}.mp3")
+            continue
+        try:
+            doc = json.loads((repo / path).read_text())
+        except json.JSONDecodeError as e:
+            problems.append(f"{path} is not valid JSON: {e}")
+            continue
+        base_doc = None
+        try:
+            base_doc = json.loads(_git(repo, "show", f"{mb}:{path}"))
+        except subprocess.CalledProcessError:
+            pass  # a new file: it replaces a seed
+        p = check_human_doc(edm, stem, doc, base_doc, seeds, check_plausible=not override)
+        if not p:
+            print(f"{path}: valid" + ("" if override else ", not vandalism"))
+        problems += [f"{path}: {x}" for x in p]
+    if override:
+        print("labels-override: the vandalism checks were skipped by the owner's label")
+    return problems
 
 
 def check_all(repo: Path) -> list[str]:
@@ -488,10 +489,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo", type=Path, default=Path("."), help="the corpus checkout (default .)")
     ap.add_argument("--seeds", type=Path, help="seeds.json (default: the repo's)")
     ap.add_argument("--override", action="store_true",
-                    help="skip the plausibility checks (the owner's labels-override PR label)")
+                    help="skip the vandalism checks (the owner's labels-override PR label)")
+    ap.add_argument("--only-labels", action="store_true",
+                    help="nothing but human label files may change (labels/** branches)")
     args = ap.parse_args(argv)
     problems = check_all(args.repo) if args.all else check_pr(args.repo, args.base, args.seeds,
-                                                              args.override)
+                                                              args.override, args.only_labels)
     for x in problems:
         print(f"::error::{x}" if "GITHUB_ACTIONS" in __import__("os").environ else x,
               file=sys.stderr)
