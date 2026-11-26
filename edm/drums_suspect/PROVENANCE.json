@@ -1,0 +1,36 @@
+{
+  "purpose": "Review priority for tools/drum-reviewer: bars where mix-level ADTOF labels are most likely wrong, so humans fix the bad sections first. Not ground truth; the scorer never reads it.",
+  "generator": {
+    "script": "scripts/drum_suspect.py",
+    "features_script": "scripts/drum_suspect_features.py",
+    "inputs": [
+      "edm/drums_adtof (mix-level ADTOF)",
+      "edm/drums_adtof_stem (ADTOF on the HT-Demucs drum stem)",
+      "per-track features from the Spark gpu_task below"
+    ]
+  },
+  "features": {
+    "spark_job": "4e8009788c074c7db59783c8bf3a1d51",
+    "job_type": "gpu_task",
+    "runtime": "torch-cu130",
+    "code_bundle_sha256": "01be7c2b6e0dcda28113c697550a7c4fb6deff0da923ae9760d1dc2ca8e22f61",
+    "librosa": "1.0.0",
+    "outputs": "blinky/seedexp-20261125/gpu/4e8009788c074c7db59783c8bf3a1d51/feats/<stem>.npz",
+    "drum_stems": "the htdemucs separate jobs listed in edm/drums_adtof_stem/PROVENANCE.json"
+  },
+  "evaluation_2026-11-25": {
+    "ground_truth": "dnb-energetic-breakbeat owner draft: 0 s of reviewed ranges, so only the 32 hits the owner added (5 kicks, 27 snares) are known corrections",
+    "tiers": {
+      "high": "16/32 corrections in 21% of the track (2.4x random)",
+      "high+medium": "30/32 in 40% (2.3x)",
+      "any tier": "32/32 in 75%"
+    },
+    "signals_alone_at_budget": {
+      "mix/stem disagreement": "18/32 at 21%, 27/32 at 31%",
+      "pattern missing (P>=0.5, no label, attack present)": "4/32 at 21%, 10/32 at 31%",
+      "filter (drum-stem centroid/rolloff z>3)": "6/32 at 10%, 7/32 at 31%",
+      "random": "6.7/32 at 21%, 9.9/32 at 31%"
+    },
+    "caveat": "One track, 32 hits, no reviewed negatives; disagreement is partly circular (ADTOF on the stem found 22 of the 27 snares). Re-check once reviewed ranges exist."
+  }
+}
