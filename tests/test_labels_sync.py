@@ -225,3 +225,18 @@ def test_no_held_runs_approves_nothing(repo):
     gh = RunsGh([])
     assert sync.approve_held_runs(gh, gitrun, repo, branch) == []
     assert not any(c[:3] == ("api", "-X", "POST") for c in gh.calls)
+
+
+def test_a_refused_approval_still_publishes_then_fails_the_run(repo, monkeypatch):
+    """The approve call failing (e.g. GITHUB_TOKEN refused) must not stop new edits being published."""
+    published = []
+    monkeypatch.setattr(sync, "open_batch", lambda gh, repo: ("labels/auto-x", 7))
+
+    def refused(*a, **k):
+        raise RuntimeError("gh api: HTTP 403")
+
+    monkeypatch.setattr(sync, "approve_held_runs", refused)
+    monkeypatch.setattr(sync, "publish_from_export", lambda args, repo, gh, git: published.append(1) or 0)
+    monkeypatch.setattr(sync, "run", lambda *a, **k: "")
+    assert sync.main(["--api", "https://example.invalid", "--repo", str(repo)]) == 1
+    assert published == [1]

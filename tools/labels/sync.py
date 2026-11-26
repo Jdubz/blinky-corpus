@@ -231,10 +231,24 @@ def main(argv: list[str] | None = None) -> int:
     git("checkout", "--quiet", "--detach", "origin/main", cwd=repo)
     # The open batch's pull_request runs appear a few seconds after the run that pushed it, so each run
     # approves the ones the previous run's push started.
+    # A refused approval must not stop publishing: report it, publish anyway, then fail the run.
     batch = open_batch(gh, repo)
+    approval_error = None
     if batch and not args.dry_run:
-        for a in approve_held_runs(gh, git, repo, batch[0]):
-            print(f"approved held run {a} of #{batch[1]}")
+        try:
+            for a in approve_held_runs(gh, git, repo, batch[0]):
+                print(f"approved held run {a} of #{batch[1]}")
+        except RuntimeError as e:
+            approval_error = f"could not approve the held runs of #{batch[1]}: {e}"
+            print(f"::error::{approval_error}")
+    status = publish_from_export(args, repo, gh, git)
+    if approval_error:
+        print(f"::error::{approval_error} (published anyway; the batch stays held until approved)")
+        return 1
+    return status
+
+
+def publish_from_export(args: argparse.Namespace, repo: Path, gh: Run, git: Run) -> int:
     export = fetch_export(args.api)
     ready, files, problems = validate(export, repo)
     for p in problems:
