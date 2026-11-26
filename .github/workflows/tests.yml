@@ -97,6 +97,9 @@ jobs:
     # clones this checkout (file://) instead of GitHub, and talks to the fake GitHub.
     - name: Run the container
       run: |
+        # A PR checkout is a detached merge commit with no refs/heads/main, and the service clones
+        # and fetches `main`: give this checkout one (the PR's tree, which is what's under test).
+        git rev-parse --verify -q refs/heads/main >/dev/null || git branch main HEAD
         docker volume create reviewer-state && docker volume create reviewer-corpus
         docker run -d --name reviewer --network host --read-only --tmpfs /tmp:size=64m \
           --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m \

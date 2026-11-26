@@ -61,7 +61,7 @@ from labelcheck import (  # noqa: E402
     f_measure, file_sha256, is_complete, merge_ranges,
 )
 
-DEFAULT_EDM = STATIC_DIR.parents[1] / "edm"
+DEFAULT_EDM = STATIC_DIR.parent.parent / "edm"  # a corpus clone; /edm in the image (unused there)
 MAX_POST_BYTES = 2 * 1024 * 1024  # a 1000-hit track is ~50 KB
 
 # Hosted mode: token buckets per client address (capacity, per seconds), and one global bucket for
