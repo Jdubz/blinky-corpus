@@ -178,6 +178,11 @@ def test_pr_cannot_delete_a_label_file(repo):
     git(repo, "checkout", "-qb", "pr2")
     write_and_commit(repo, {"edm/drums_human/a.drums.json": None})
     (p,) = lc.check_pr(repo, "main", None, override=False)
+    assert "status D" in p and "labels-override" in p
+    # the owner's labels-override label allows it (reverting a batch that added the file) ...
+    assert lc.check_pr(repo, "main", None, override=True) == []
+    # ... but never on a labels/ batch branch
+    (p,) = lc.check_pr(repo, "main", None, override=True, only_labels=True)
     assert "status D" in p
 
 
