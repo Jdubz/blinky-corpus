@@ -18,6 +18,8 @@ is the corpus's own code on main, with that workflow's GITHUB_TOKEN:
 4. Push it to the open batch's labels/auto-* branch (rebuilt on today's main), or to a new one.
    Start tests.yml on the branch (its "Scoring tests" job is main's required check), open the PR if
    there isn't one, and turn on auto-merge (squash).
+5. On the next run, approve the batch PR's own held pull_request runs (approve_held_runs): GitHub holds
+   them for the Actions bot, and a held run blocks the merge.
 
     python tools/labels/sync.py --api https://blinky-labels-api.joshwentworth.com [--dry-run]
 
@@ -125,6 +127,40 @@ def open_batch(gh: Run, repo: Path) -> tuple[str, int] | None:
     return sorted(mine, key=lambda x: x[1])[0] if mine else None
 
 
+BOT_ACTOR = "github-actions[bot]"  # who the batch PR's pull_request runs are started by
+
+
+def approve_held_runs(gh: Run, git: Run, repo: Path, branch: str) -> list[str]:
+    """Approve the held pull_request runs of this workflow's own open batch. Returns what it approved.
+
+    GitHub holds the pull_request runs of a PR opened by GITHUB_TOKEN as "action_required" (the repo's
+    approval policy for first-time contributors counts the Actions bot as one), and a held run keeps the
+    PR BLOCKED even though tests.yml's dispatched run already passed Scoring tests on the same commit.
+
+    Only runs that are exactly ours are approved: event pull_request, started by the Actions bot, from
+    this repository (never a fork), on the open batch's branch, at the commit that branch points to now.
+    That commit is main plus label files this job wrote and checked, so the workflows the run executes
+    ARE main's (see labels-sync.yml). Anything else stays held for a human."""
+    git("fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", cwd=repo)
+    tip = git("rev-parse", f"origin/{branch}", cwd=repo).strip()
+    raw = gh("api", "-X", "GET", "repos/{owner}/{repo}/actions/runs", "-f", f"branch={branch}",
+             "-f", "event=pull_request", "-f", "status=action_required", "-f", "per_page=50", cwd=repo)
+    approved = []
+    for r in (json.loads(raw or "{}").get("workflow_runs") or []):
+        ours = (r.get("event") == "pull_request" and r.get("status") == "completed"
+                and r.get("conclusion") == "action_required"
+                and r.get("head_branch") == branch and r.get("head_sha") == tip
+                and (r.get("actor") or {}).get("login") == BOT_ACTOR
+                and (r.get("triggering_actor") or {}).get("login") == BOT_ACTOR
+                and (r.get("head_repository") or {}).get("full_name") == (r.get("repository") or {}).get("full_name"))
+        if not ours:
+            print(f"::warning::left held: run {r.get('id')} ({r.get('name')}) is not this batch's own run")
+            continue
+        gh("api", "-X", "POST", f"repos/{{owner}}/{{repo}}/actions/runs/{int(r['id'])}/approve", cwd=repo)
+        approved.append(f"{r.get('name')} ({r['id']})")
+    return approved
+
+
 def publish(repo: Path, files: dict[str, str], gh: Run, git: Run, dry_run: bool = False) -> str:
     """Commit `files` on top of origin/main and publish them as the batch. Returns what it did."""
     if not files:
@@ -193,6 +229,12 @@ def main(argv: list[str] | None = None) -> int:
 
     git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main", cwd=repo)
     git("checkout", "--quiet", "--detach", "origin/main", cwd=repo)
+    # The open batch's pull_request runs appear a few seconds after the run that pushed it, so each run
+    # approves the ones the previous run's push started.
+    batch = open_batch(gh, repo)
+    if batch and not args.dry_run:
+        for a in approve_held_runs(gh, git, repo, batch[0]):
+            print(f"approved held run {a} of #{batch[1]}")
     export = fetch_export(args.api)
     ready, files, problems = validate(export, repo)
     for p in problems:

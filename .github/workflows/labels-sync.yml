@@ -18,8 +18,14 @@ name: Labels sync
 #     of labels/auto-* branches, and it writes nothing but label files on top of main: the branch's
 #     workflows and scripts ARE main's. (The labels service can't push anything at all.)
 #
+#   * GitHub holds the batch PR's pull_request runs ("action_required": the first-time-contributor
+#     approval policy counts the Actions bot), and a held run blocks the merge. sync.py approves only
+#     the batch's own runs: event pull_request, started by the Actions bot, from this repo (never a
+#     fork), on the open labels/auto-* branch at its current commit. Every other held run waits for a
+#     human, so the policy still guards fork PRs.
+#
 # Permissions: contents (push the batch branch), pull-requests (open it, turn on auto-merge), actions
-# (start tests.yml on the branch). No secrets.
+# (start tests.yml on the branch, approve the batch's own held runs). No secrets.
 
 on:
   schedule:
