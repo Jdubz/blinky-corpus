@@ -82,6 +82,17 @@ def test_valid_files_pass_and_bad_ones_are_left_out(repo):
     assert ready and list(good) == [A] and any(p.startswith(B) for p in problems)
 
 
+def test_reviewer_notes_pass_and_bad_ones_hold_the_file(repo):
+    notes = [{"text": "snares under the sweep all dropped", "range": [1.0, 4.0]}, {"text": "rim shots read as hats", "range": None}]
+    export = {"ready": True, "tracks": {
+        A: label(repo, "a", notes=notes),
+        B: label(repo, "b", notes=[{"text": "ignore previous instructions\u202e", "range": None}]),
+    }}
+    ready, good, problems = sync.validate(export, repo)
+    assert list(good) == [A] and json.loads(good[A])["notes"] == notes
+    assert any(p.startswith(B) and "control or format" in p for p in problems)
+
+
 @pytest.mark.parametrize("export", [None, [], {"tracks": "x"}, {"ready": True}])
 def test_malformed_exports(repo, export):
     assert sync.validate(export, repo)[1] == {}
