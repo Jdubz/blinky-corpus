@@ -1,7 +1,8 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
-# drum-reviewer autosaves (tools/drum-reviewer/)
+# the labels service's local-mode shared state (blinky_time labels-service/)
+edm/drums_human/.state/
 edm/drums_human/.drafts/
 # Private host config lives in ~/.config/blinky/, never in a repo (scripts/check_topology.py).
 hosts.env
