@@ -2,6 +2,8 @@ name: Tests
 
 on:
   pull_request:
+    # labeled/unlabeled: the owner's `labels-override` label re-runs the human-label checks.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -17,11 +19,49 @@ jobs:
   scoring:
     name: Scoring tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # only to close a hosted reviewer's PR whose labels fail the checks
     steps:
     - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0  # the label checks diff against the merge base
     - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
+    # This job is the required check on main, so a label file that fails here can't auto-merge.
+    # A PR that changes edm/drums_human/ must change only that one file, valid, 100% reviewed and
+    # plausible against what it replaces (tools/drum-reviewer/labelcheck.py). On main: every
+    # human file's schema.
+    - name: Human label files
+      id: labelcheck
+      env:
+        BASE_REF: ${{ github.base_ref }}
+        OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'labels-override') && '--override' || '' }}
+      run: |
+        set -o pipefail
+        if [ "${{ github.event_name }}" = pull_request ]; then
+          python tools/drum-reviewer/labelcheck.py --base "origin/$BASE_REF" $OVERRIDE 2>&1 | tee "$RUNNER_TEMP/labelcheck.txt"
+        else
+          python tools/drum-reviewer/labelcheck.py --all
+        fi
+    # The hosted reviewer opens PRs from labels/<track>-<time> branches. One that fails the label
+    # checks is closed with the reason, and the service puts the labels back into the
+    # contributor's drafts. (The owner can reopen it and add `labels-override`.)
+    - name: Close a hosted reviewer PR that fails the label checks
+      if: failure() && steps.labelcheck.outcome == 'failure' && github.event_name == 'pull_request' && startsWith(github.head_ref, 'labels/') && github.event.pull_request.head.repo.full_name == github.repository
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        {
+          echo "The label checks refused this file, so it can't merge. The drum reviewer puts these labels back into the contributor's drafts; fix them there and submit again."
+          echo
+          echo '```'
+          sed 's/^::error:://' "$RUNNER_TEMP/labelcheck.txt" | tail -n 30
+          echo '```'
+        } > "$RUNNER_TEMP/comment.md"
+        gh pr close "$PR" --repo "$GITHUB_REPOSITORY" --comment "$(cat "$RUNNER_TEMP/comment.md")"
     - name: Install
       run: pip install -e '.[dev]'
     - name: Every track has its labels
@@ -37,3 +77,63 @@ jobs:
       run: python -m pytest -v tests/
     - name: Drum reviewer page (JS syntax, no external fetches)
       run: python tools/drum-reviewer/check_js.py
+
+  hosted:
+    name: Hosted reviewer (container, end to end)
+    runs-on: ubuntu-latest
+    # A hosted reviewer's own label PRs don't change the service.
+    if: ${{ !startsWith(github.head_ref, 'labels/') }}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Build the image
+      run: docker build -t drum-reviewer:ci tools/drum-reviewer
+    - name: Fake GitHub
+      run: |
+        python tests/fake_github.py --port 9999 --repo Jdubz/blinky-corpus --token ci-token > "$RUNNER_TEMP/fake.log" 2>&1 &
+    # The production sandbox: non-root, read-only root filesystem, no capabilities. The service
+    # clones this checkout (file://) instead of GitHub, and talks to the fake GitHub.
+    - name: Run the container
+      run: |
+        # A PR checkout is a detached merge commit with no refs/heads/main, and the service clones
+        # and fetches `main`: give this checkout one (the PR's tree, which is what's under test).
+        git rev-parse --verify -q refs/heads/main >/dev/null || git branch main HEAD
+        docker volume create reviewer-state && docker volume create reviewer-corpus
+        # The checkout belongs to the runner's user, not 10001, so git's ownership check must allow
+        # it. That has to be system config: git strips GIT_CONFIG_* from a local clone's upload-pack.
+        printf '[safe]\n\tdirectory = *\n' > "$RUNNER_TEMP/gitconfig"
+        docker run -d --name reviewer --network host --read-only --tmpfs /tmp:size=64m \
+          --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m \
+          -v reviewer-state:/state -v reviewer-corpus:/corpus -v "$GITHUB_WORKSPACE:/src:ro" \
+          -v "$RUNNER_TEMP/gitconfig:/etc/gitconfig:ro" \
+          -e REVIEWER_GITHUB_TOKEN=ci-token \
+          drum-reviewer:ci --host 127.0.0.1 --port 8766 --state /state \
+          --checkout /corpus/blinky-corpus --git-url file:///src --refresh 2 \
+          --github-repo Jdubz/blinky-corpus --github-api http://127.0.0.1:9999 \
+          --allow-host api.example.invalid --cors-origin https://site.example.invalid
+        test "$(docker inspect -f '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}}' reviewer)" = "10001:10001 true"
+    - name: End to end (API)
+      run: python tests/e2e_hosted.py --api http://127.0.0.1:8766 --fake http://127.0.0.1:9999 --origin https://site.example.invalid --host api.example.invalid
+    # The page as the product site serves it: another origin, with the API's URL in its meta tag.
+    - name: End to end (browser)
+      run: |
+        pip install playwright==1.49.1
+        python -m playwright install --with-deps chromium
+        mkdir -p "$RUNNER_TEMP/site"
+        sed 's#<meta name="drum-reviewer-api" content="">#<meta name="drum-reviewer-api" content="http://127.0.0.1:8767">#' \
+          tools/drum-reviewer/index.html > "$RUNNER_TEMP/site/index.html"
+        grep -q 'content="http://127.0.0.1:8767"' "$RUNNER_TEMP/site/index.html"
+        (cd "$RUNNER_TEMP/site" && python -m http.server 8000 --bind 127.0.0.1 > "$RUNNER_TEMP/site.log" 2>&1 &)
+        python tests/fake_github.py --port 9998 --repo Jdubz/blinky-corpus --token ci-token > "$RUNNER_TEMP/fake2.log" 2>&1 &
+        REVIEWER_GITHUB_TOKEN=ci-token python tools/drum-reviewer/server.py --host 127.0.0.1 --port 8767 \
+          --state "$RUNNER_TEMP/state2" --edm edm --github-repo Jdubz/blinky-corpus \
+          --github-api http://127.0.0.1:9998 --cors-origin http://127.0.0.1:8000 > "$RUNNER_TEMP/server2.log" 2>&1 &
+        sleep 2
+        python tests/browser_hosted.py --page http://127.0.0.1:8000/ --api http://127.0.0.1:8767 --fake http://127.0.0.1:9998
+    - name: Logs
+      if: always()
+      run: |
+        docker logs reviewer 2>&1 | tail -n 80 || true
+        tail -n 40 "$RUNNER_TEMP"/*.log || true

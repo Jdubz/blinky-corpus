@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Drum Reviewer</title>
 <!-- Self-contained: no external scripts, fonts or styles, so it works offline on a LAN. -->
+<!-- The API this page talks to. Empty: the server that served the page (local mode). A site that
+     hosts the page elsewhere sets the hosted API's public URL here at build time. -->
+<meta name="drum-reviewer-api" content="">
 <style>
   :root {
     --bg: #14161c; --panel: #1c1f27; --panel2: #242833; --line: #333846; --text: #e3e6ee; --dim: #8a90a0;
@@ -25,8 +28,11 @@
   #trackname { font-weight: 600; font-size: 14px; }
   .badge { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; background: var(--panel2); border: 1px solid var(--line); }
   .badge.human { border-color: var(--rev); color: var(--rev); }
-  .badge.drums_adtof { border-color: var(--snare); color: var(--snare); }
-  .badge.kick_weighted, .badge.empty { border-color: var(--err); color: var(--err); }
+  .badge.seed { border-color: var(--snare); color: var(--snare); }
+  .badge.bad, .badge.empty { border-color: var(--err); color: var(--err); }
+  .badge.pending { border-color: var(--warn); color: var(--warn); }
+  .lockinfo { color: var(--warn); }
+  #who { cursor: pointer; }
   #status { color: var(--dim); }
   #status.dirty { color: var(--warn); }
   .spacer { flex: 1; }
@@ -88,6 +94,7 @@
   <span id="seedbadge" class="badge" style="display:none"></span>
   <span id="counts" class="dim"></span>
   <span class="spacer"></span>
+  <span id="who" class="chip badge" style="display:none" title="Your name, shown to others while you edit and recorded with your saves. Click to change."></span>
   <span id="status"></span>
   <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
   <button id="btn-redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
@@ -120,6 +127,10 @@
 </div>
 <div id="settings" class="modal-bg"><div class="modal" role="dialog" aria-label="Settings">
   <div class="modal-head"><h2>Settings</h2><span class="dim">remembered in this browser</span><span class="spacer"></span><button id="btn-settings-close">Close (Esc)</button></div>
+  <div id="you-settings" style="display:none">
+  <h3>You</h3>
+    <div class="setting"><div class="ctl"><input type="text" id="contributor" maxlength="40" placeholder="anonymous" style="width:190px" autocomplete="nickname"></div><div class="desc"><strong style="color:var(--text)">Your name (optional).</strong> Others see it in the track list while you edit a track, and it's recorded with your saves in the corpus's public history. Your drafts are kept under it, so you can carry on from another computer by typing the same name. Letters, digits, spaces and . ' - _, up to 40. <span id="contributor-err" class="bad"></span></div></div>
+  </div>
   <h3>Label clicks</h3>
     <div class="setting"><div class="ctl"><label class="k"><input type="checkbox" id="click-kick"> kick clicks</label></div><div class="desc"><strong style="color:var(--text)">Kick clicks.</strong> A low click at every kick label during playback. If the click doesn't land on the kick drum, the label is off. Off by default. Shortcut <kbd>Shift+K</kbd>.</div></div>
     <div class="setting"><div class="ctl"><label class="s"><input type="checkbox" id="click-snare"> snare clicks</label></div><div class="desc"><strong style="color:var(--text)">Snare clicks.</strong> A high click at every snare label. Off by default. Shortcut <kbd>Shift+S</kbd>.</div></div>
@@ -133,12 +144,12 @@
     <div class="setting"><div class="ctl"><label><input type="checkbox" id="snap-add" checked> snap new hits</label></div><div class="desc"><strong style="color:var(--text)">Snap on add.</strong> A hit you add moves to the nearest strong attack within ±25 ms. <kbd>N</kbd> snaps selected hits.</div></div>
     <div class="setting"><div class="ctl"><select id="snap-ref"><option value="attack">attack (150 Hz–5 kHz)</option><option value="lane">own lane band</option></select></div><div class="desc"><strong style="color:var(--text)">Snap target.</strong> What snapping aligns to. "attack" is the transient both drums share; a kick's low-frequency energy builds up a few ms after it.</div></div>
   <h3>Display</h3>
-    <div class="setting"><div class="ctl"><select id="ref"><option value="">none</option><option value="drums_adtof">ADTOF</option><option value="kick_weighted">band (old)</option></select></div><div class="desc"><strong style="color:var(--text)">Reference ticks.</strong> Faint ghost ticks at the bottom of each lane from another label set, for comparison. They're not editable.</div></div>
-    <div class="setting"><div class="ctl"><label><input type="checkbox" id="show-hats"> show ADTOF hi-hats</label></div><div class="desc"><strong style="color:var(--text)">Hi-hat ticks.</strong> Faint read-only marks along the top of the snare lane where ADTOF heard hi-hats. Not labels you're reviewing. Off by default.</div></div>
+    <div class="setting"><div class="ctl"><select id="ref"><option value="">none</option></select></div><div class="desc"><strong style="color:var(--text)">Reference ticks.</strong> Faint ghost ticks at the bottom of each lane from another label set, for comparison. They're not editable.</div></div>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="show-hats"> show seed hi-hats</label></div><div class="desc"><strong style="color:var(--text)">Hi-hat ticks.</strong> Faint read-only marks along the top of the snare lane where the best automatic labels heard hi-hats. Not labels you're reviewing. Off by default.</div></div>
 </div></div>
 <div id="help" class="modal-bg"><div class="modal" role="dialog" aria-label="Help">
   <div class="modal-head"><h2>How this page works</h2><span class="spacer"></span><button id="btn-help-close">Got it (Esc)</button></div>
-  <p>You're checking the <span class="k">kick</span> and <span class="s">snare</span> labels of one track at a time. Each track starts with labels from ADTOF, an automatic drum transcriber. Fix what's wrong, mark each screen reviewed, and save. The scorer uses your labels once a track is 100% reviewed and saved.</p>
+  <p>You're checking the <span class="k">kick</span> and <span class="s">snare</span> labels of one track at a time. Each track starts with the best automatic labels available (from a drum transcriber such as ADTOF). Fix what's wrong, mark each screen reviewed, and save. The scorer uses your labels once a track is 100% reviewed and saved.</p>
   <h3>Reviewing a track</h3>
   <ol>
     <li><strong>Pick a track</strong> with <em>Tracks</em> (or <kbd>T</kbd>). The tracks most likely to be wrong are listed first.</li>
@@ -154,6 +165,14 @@
     <li><strong>Mark the screen reviewed</strong> with <em>Reviewed → next</em> (<kbd>Enter</kbd>). It moves on one screen. Green in the bottom lane and the overview shows what you've covered; <kbd>U</kbd> jumps to anything skipped.</li>
     <li><strong>Save</strong> (<kbd>Ctrl+S</kbd>) when the track is 100% reviewed. Until then every edit autosaves as a draft, so you can stop anytime.</li>
   </ol>
+  <div id="help-hosted" style="display:none">
+  <h3>Reviewing together</h3>
+  <ul>
+    <li><strong>One person edits a track at a time.</strong> Opening a track takes a short edit lock (15 minutes, renewed while you work). Others see "being edited by" your name and can look and listen, but not edit. Close the tab or open another track and the lock goes.</li>
+    <li><strong>Your name</strong> (<em>⚙ Settings</em>) is optional. It's shown with your lock and recorded with your saves. Drafts are kept on the server under it, so you can carry on from another computer.</li>
+    <li><strong>Submit</strong> (<kbd>Ctrl+S</kbd>) needs the track 100% reviewed. It opens a pull request on the corpus; checks run on it and it merges by itself when they pass. Until then the track shows "in review" and takes no other save.</li>
+  </ul>
+  </div>
   <h3>What you're looking at</h3>
   <table class="lanes">
     <tr><td>overview</td><td>The whole track. Green is reviewed; the box is the current view. Click to jump.</td></tr>
@@ -181,7 +200,7 @@
     <strong>Tracks</strong><span class="dim" id="tracks-sum"></span><span class="spacer"></span><button id="btn-tracks-close">Close (Esc)</button>
   </div>
   <table>
-    <thead><tr><th>#</th><th>track</th><th>reviewed</th><th>labels</th><th class="k">kicks</th><th class="s">snares</th><th title="1 − mean per-class F-measure (±50 ms) between ADTOF and the old band labels: higher = the old labels were worse, review first">ADTOF↔band disagreement</th><th>draft</th><th>updated</th></tr></thead>
+    <thead><tr><th>#</th><th>track</th><th>reviewed</th><th>labels</th><th class="k">kicks</th><th class="s">snares</th><th title="1 − mean per-class F-measure (±50 ms) between the two best automatic label sets: higher = they disagree more, review first">seed disagreement</th><th>draft</th><th>status</th><th>updated</th></tr></thead>
     <tbody id="tracks-body"></tbody>
   </table>
   <p class="dim">Sorted worst first: unfinished tracks by disagreement, then finished ones. A track is done when 100% of it is marked reviewed and saved.</p>
@@ -337,7 +356,23 @@ const S = {
   cursor: 0, region: null, hover: null, hoverHit: null, drag: null, flash: null,
   dirty: false, startedFrom: null, draftTimer: null, lastDraft: null, lastSnap: null,
   issueIdx: -1,
+  readOnly: false, lockHeld: false, lastActivity: Date.now(),
 };
+// Where the API lives (see the meta tag), and what kind of server it is (/api/config).
+const API_BASE = (document.querySelector('meta[name="drum-reviewer-api"]')?.content || "").replace(/\/+$/, "");
+let CFG = { hosted: false, seeds: [], saving: true, lock_ttl_s: 900 };
+const NAME_KEY = "drumReviewer.contributor.v1", CLIENT_KEY = "drumReviewer.client.v1";
+const NAME_RE = /^[\p{L}\p{M}\p{N}_ .'-]{0,40}$/u;  // the server's rule (hosted.name_ok), after NFC
+function contributor() { let v = ""; try { v = localStorage.getItem(NAME_KEY) || ""; } catch (e) { v = ""; } v = v.normalize("NFC"); return NAME_RE.test(v) ? v : ""; }
+const CLIENT_ID = (() => {  // per tab: two tabs are two editors, and the edit lock keeps them apart
+  let id = null;
+  try { id = sessionStorage.getItem(CLIENT_KEY); } catch (e) { id = null; }
+  if (!id || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+    id = (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join(""));
+    try { sessionStorage.setItem(CLIENT_KEY, id); } catch (e) { /* private window: a new id per load */ }
+  }
+  return id;
+})();
 const actx = new (window.AudioContext || window.webkitAudioContext)();
 const P = { playing: false, src: null, startCtx: 0, startPos: 0, rate: 1, loop: false, a: 0, b: 0, schedV: 0, nodes: [], timer: null };
 
@@ -348,13 +383,17 @@ function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function toast(msg, ms = 2200) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", ms); }
 function median(a) { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
 function quantile(a, q) { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; }
-async function api(path, body) {
-  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-  const r = await fetch(path, opt);
+function apiHeaders() { return { "X-Reviewer-Client": CLIENT_ID, "X-Reviewer-Name": encodeURIComponent(contributor()) }; }
+async function api(path, body, extra) {
+  const headers = apiHeaders();
+  const opt = body === undefined ? { headers } : { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(API_BASE + path, { ...opt, ...(extra || {}) });
   const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  if (!r.ok) { const err = new Error(j.error || `HTTP ${r.status}`); err.status = r.status; err.body = j; throw err; }
   return j;
 }
+function seedLabel(name) { const s = CFG.seeds.find(x => x.name === name); return s ? s.label : name; }
+function seedBad(name) { const s = CFG.seeds.find(x => x.name === name); return !!(s && s.warning); }
 function lowerBound(t) { let lo = 0, hi = S.onsets.length; while (lo < hi) { const m = (lo + hi) >> 1; if (S.onsets[m].time < t) lo = m + 1; else hi = m; } return lo; }
 function sortOnsets() { S.onsets.sort((a, b) => a.time - b.time); }
 
@@ -513,8 +552,9 @@ function drawReviewed(g) {
 function drawRefs(g) {
   const refs = S.meta && S.meta.references || {}, which = $("ref").value;
   const t0 = S.view.start - 0.01, t1 = S.view.start + S.view.dur + 0.01;
-  if ($("show-hats").checked && (refs.drums_adtof || refs.kick_weighted)) {
-    const hh = (refs.drums_adtof || refs.kick_weighted).hihat || [];
+  const hatSrc = Object.values(refs).find(r => r.hihat && r.hihat.length);
+  if ($("show-hats").checked && hatSrc) {
+    const hh = hatSrc.hihat;
     g.fillStyle = "rgba(154,160,173,0.45)";
     for (const t of hh) if (t >= t0 && t <= t1) g.fillRect(Math.round(t2x(t)), LANE.snare.y + 12, 1, 7);
   }
@@ -612,9 +652,10 @@ function snapshot() { return { onsets: S.onsets.map(o => ({ ...o })), reviewed: 
 function checkpoint() { S.undo.push(snapshot()); if (S.undo.length > 500) S.undo.shift(); S.redo = []; }
 function restore(st) { S.onsets = st.onsets.map(o => ({ ...o })); S.reviewed = st.reviewed.map(r => r.slice()); const ids = new Set(S.onsets.map(o => o.id)); for (const id of [...S.sel]) if (!ids.has(id)) S.sel.delete(id); }
 function edited() { sortOnsets(); S.dirty = true; scheduleDraft(); drawAll(); updateInfo(); }
-function edit(fn) { checkpoint(); fn(); edited(); }
-function undo() { if (!S.undo.length) return toast("nothing to undo"); S.redo.push(snapshot()); restore(S.undo.pop()); edited(); }
-function redo() { if (!S.redo.length) return toast("nothing to redo"); S.undo.push(snapshot()); restore(S.redo.pop()); edited(); }
+function viewOnly() { if (!S.readOnly) return false; toast(S.readOnlyWhy || "view only", 3500); return true; }
+function edit(fn) { if (viewOnly()) return; checkpoint(); fn(); edited(); }
+function undo() { if (viewOnly()) return; if (!S.undo.length) return toast("nothing to undo"); S.redo.push(snapshot()); restore(S.undo.pop()); edited(); }
+function redo() { if (viewOnly()) return; if (!S.redo.length) return toast("nothing to redo"); S.undo.push(snapshot()); restore(S.redo.pop()); edited(); }
 function selected() { return S.onsets.filter(o => S.sel.has(o.id)); }
 function flash(t, text, lane) { S.flash = { t, text, y: LANE[lane].y + 34, until: performance.now() + 1600 }; drawOverlay(); setTimeout(drawOverlay, 1650); }
 
@@ -756,30 +797,45 @@ function renderTracks() {
     const cells = [
       String(i + 1), t.stem,
       `<span class="bar"><i style="width:${(100 * share).toFixed(1)}%"></i></span>${t.complete ? '<span class="ok">done</span>' : (100 * share).toFixed(0) + "%"}`,
-      `<span class="badge ${t.label_source}">${t.label_source === "kick_weighted" ? "band (bad)" : t.label_source}</span>`,
+      t.label_source === "human" ? '<span class="badge human">human</span>' : t.label_source === "none" ? '<span class="badge empty">none</span>'
+        : `<span class="badge ${seedBad(t.label_source) ? "bad" : "seed"}">${escapeHtml(seedLabel(t.label_source))}</span>`,
       String(t.counts.kick), String(t.counts.snare),
-      t.disagreement === null ? '<span class="dim">no ADTOF yet</span>' : t.disagreement.toFixed(3),
-      t.has_draft ? '<span class="k">draft</span>' : "", t.updated ? t.updated.replace("T", " ").slice(0, 16) : "",
+      t.disagreement === null ? '<span class="dim">—</span>' : t.disagreement.toFixed(3),
+      t.has_draft ? '<span class="k">draft</span>' : "",
+      trackStatus(t),
+      t.updated ? t.updated.replace("T", " ").slice(0, 16) : "",
     ];
     tr.innerHTML = cells.map((c, k) => `<td${k === 1 ? ' class="mono"' : ""}>${k === 1 ? escapeHtml(c) : c}</td>`).join("");
     tr.onclick = () => { closeTracks(); openTrack(t.stem); };
     $("tracks-body").appendChild(tr);
   });
 }
-function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
+function safeUrl(u) { return /^https:\/\/github\.com\//.test(u || "") ? u : "#"; }
+function trackStatus(t) {
+  const out = [];
+  if (t.pending) out.push(`<span class="badge pending">in review</span> <a class="link" href="${escapeHtml(safeUrl(t.pending.url))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">PR #${Number(t.pending.pr)}</a>`);
+  if (t.lock) out.push(t.lock.mine ? '<span class="lockinfo">you are editing</span>' : `<span class="lockinfo">being edited by ${escapeHtml(t.lock.name)}</span>`);
+  return out.join(" ");
+}
 function openTracks() { $("tracks").classList.add("open"); loadTracks().catch(e => toast(e.message)); }
 function closeTracks() { $("tracks").classList.remove("open"); }
 
 async function openTrack(stem) {
   if (S.dirty && !confirm("Unsaved changes on this track (a draft is autosaved). Open another track anyway?")) return;
   stopPlayback(true);
+  const prev = S.stem, hadLock = S.lockHeld;
   let meta;
   try { meta = await api(`/api/track?stem=${encodeURIComponent(stem)}`); } catch (e) { return toast(`open failed: ${e.message}`, 5000); }
+  if (CFG.hosted && hadLock && prev && prev !== stem) releaseLock(prev);
+  let lock = null;
+  if (CFG.hosted) lock = await takeLock(stem, meta);
   Object.assign(S, { stem, meta, buf: null, ana: null, duration: 0, onsets: [], reviewed: [], sel: new Set(), undo: [], redo: [], region: null, cursor: 0, dirty: false, lastSnap: null, issueIdx: -1 });
+  Object.assign(S, { lockHeld: !!(lock && lock.ok), readOnly: CFG.hosted && !(lock && lock.ok), readOnlyWhy: lock && lock.why, lastActivity: Date.now() });
   S.view = { start: 0, dur: DEFAULT_VIEW };
   history.replaceState(null, "", `#${encodeURIComponent(stem)}`);
   let src = meta, fromDraft = false;
-  if (meta.draft) {
+  if (meta.draft && !S.readOnly) {
     const d = meta.draft, share = d.duration ? (100 * d.reviewed_ranges.reduce((s, r) => s + r[1] - r[0], 0) / d.duration).toFixed(0) : "?";
     if (confirm(`An autosaved draft exists for ${stem} (${d.updated}, ${d.onsets.length} hits, ${share}% reviewed).\n\nOK = restore the draft.  Cancel = start from the ${meta.seed} labels (the draft stays on disk until your next edit).`)) { src = d; fromDraft = true; }
   }
@@ -790,14 +846,21 @@ async function openTrack(stem) {
   S.dirty = fromDraft;
   $("trackname").textContent = stem;
   const badge = $("seedbadge"); badge.style.display = ""; badge.className = `badge ${fromDraft ? "human" : meta.seed}`;
-  badge.textContent = fromDraft ? `draft (from ${S.startedFrom && S.startedFrom.source || meta.seed})` : ({ human: "human GT", drums_adtof: "seeded: ADTOF", kick_weighted: "seeded: band detector (known bad)", empty: "no labels" })[meta.seed];
+  if (!fromDraft && meta.seed !== "human" && meta.seed !== "empty") badge.className = `badge ${seedBad(meta.seed) ? "bad" : "seed"}`;
+  badge.textContent = fromDraft ? `draft (from ${seedLabel(S.startedFrom && S.startedFrom.source || meta.seed)})` : meta.seed === "human" ? "human GT" : meta.seed === "empty" ? "no labels" : `seeded: ${seedLabel(meta.seed)}`;
   const be = $("banner-err"), bw = $("banner-warn");
   be.className = "banner" + (meta.error ? " err" : ""); be.textContent = meta.error || "";
-  bw.className = "banner" + (meta.warning ? " warn" : ""); bw.textContent = meta.warning ? `⚠ ${meta.warning}` : "";
-  $("ref").value = meta.seed === "human" && meta.references.drums_adtof ? "drums_adtof" : "";
+  const notes = [meta.warning ? `⚠ ${meta.warning}` : "", S.readOnly ? `🔒 ${S.readOnlyWhy}` : "",
+    meta.pending ? `In review: a save of this track by ${meta.pending.contributor} is pull request #${meta.pending.pr}. It joins the corpus once its checks pass; until then the track takes no other save (your edits still autosave as a draft).` : ""].filter(Boolean);
+  bw.className = "banner" + (notes.length ? " warn" : ""); bw.textContent = notes.join("  ");
+  const refNames = Object.keys(meta.references || {});
+  $("ref").innerHTML = '<option value="">none</option>' + refNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(seedLabel(n))}</option>`).join("");
+  $("ref").value = meta.seed === "human" && refNames.length ? refNames[0] : "";
   S.analyzing = "decoding audio…"; updateInfo(); drawAll();
   try {
-    const ab = await (await fetch(meta.audio_url)).arrayBuffer();
+    const ar = await fetch(API_BASE + meta.audio_url);
+    if (!ar.ok) throw new Error(`HTTP ${ar.status}`);
+    const ab = await ar.arrayBuffer();
     S.buf = await actx.decodeAudioData(ab);
   } catch (e) { S.analyzing = `audio decode failed: ${e.message}`; drawAll(); return; }
   if (S.stem !== stem) return;
@@ -829,39 +892,90 @@ function runAnalysis(stem) {
 }
 function docBody() {
   return {
-    audio_sha256: S.meta.audio_sha256, duration: S.duration, started_from: S.startedFrom, seed: S.meta.seed,
+    audio_sha256: S.meta.audio_sha256, duration: S.duration, started_from: S.startedFrom, seed: S.meta.seed, base_version: S.meta.version,
     onsets: S.onsets.map(o => ({ time: +o.time.toFixed(4), type: o.type })), reviewed_ranges: S.reviewed,
   };
 }
 function scheduleDraft() {
   clearTimeout(S.draftTimer);
-  if (!S.meta || S.meta.error || !S.duration) return;
+  if (!S.meta || S.meta.error || !S.duration || S.readOnly) return;
   const stem = S.stem;
   S.draftTimer = setTimeout(async () => {
     try { const r = await api(`/api/draft?stem=${encodeURIComponent(stem)}`, docBody()); if (S.stem === stem) { S.lastDraft = r.updated; updateStatus(); } }
-    catch (e) { toast(`draft autosave failed: ${e.message}`, 6000); }
+    catch (e) {
+      if (e.status === 423 && S.stem === stem && await relock(stem)) return scheduleDraft();
+      toast(`draft autosave failed: ${e.message}`, 6000);
+    }
   }, 600);
 }
 async function save() {
   if (!S.meta || !S.duration) return;
   if (S.meta.error) return toast("saving refused: " + S.meta.error, 6000);
+  if (viewOnly()) return;
+  if (CFG.hosted && !isComplete()) return toast("Submitting adds the track to the corpus, so it needs to be 100% reviewed first (U finds the gaps). Your edits autosave as a draft.", 6000);
+  if (CFG.hosted && !confirm(`Submit ${S.stem} to the corpus?\n\nThis opens a pull request with your labels${contributor() ? ` under the name "${contributor()}"` : " (anonymously: set a name in Settings)"}. It merges by itself once its checks pass.`)) return;
   clearTimeout(S.draftTimer);
   try {
     const r = await api(`/api/save?stem=${encodeURIComponent(S.stem)}`, docBody());
     S.dirty = false; S.lastDraft = null;
     S.meta.seed = "human";
     const badge = $("seedbadge"); badge.className = "badge human"; badge.textContent = "human GT";
-    toast(`saved ${r.count} hits to ${r.path}${r.complete ? " · track complete" : ""}`, 3500);
+    if (CFG.hosted) {
+      S.lockHeld = false; S.readOnly = true; S.readOnlyWhy = `Submitted as pull request #${r.pr}: it joins the corpus once its checks pass.`;
+      S.meta.pending = { pr: r.pr, url: r.url, contributor: contributor() || "you" };
+      const bw = $("banner-warn"); bw.className = "banner warn";
+      bw.innerHTML = `✓ Submitted as <a class="link" href="${escapeHtml(safeUrl(r.url))}" target="_blank" rel="noopener">pull request #${Number(r.pr)}</a>. It joins the corpus once its checks pass${r.automerge ? "" : " and the owner merges it"}. Thank you!`;
+      toast(`submitted: PR #${r.pr}`, 5000);
+    } else toast(`saved ${r.count} hits to ${r.path}${r.complete ? " · track complete" : ""}`, 3500);
     updateInfo(); loadTracks().catch(() => {});
-  } catch (e) { toast(`save failed: ${e.message}`, 8000); }
+  } catch (e) {
+    if (e.status === 423 && await relock(S.stem)) return save();
+    toast(`save failed: ${e.message}`, 12000);
+  }
 }
+
+// ---------------------------------------------------------------- hosted: edit locks
+// Returns { ok: true } or { ok: false, why }. A lock held under your own name elsewhere can be taken over.
+async function takeLock(stem, meta) {
+  try { await api(`/api/lock?stem=${encodeURIComponent(stem)}`, { action: "acquire" }); return { ok: true }; }
+  catch (e) {
+    const lk = e.body && e.body.lock;
+    if (e.status === 423 && lk && contributor() && lk.name === contributor() &&
+        confirm(`You (${lk.name}) are editing ${stem} somewhere else, maybe another tab or computer. Take it over here? The other one becomes view-only.`)) {
+      try { await api(`/api/lock?stem=${encodeURIComponent(stem)}`, { action: "acquire", takeover: true }); return { ok: true }; }
+      catch (e2) { return { ok: false, why: `View only: ${e2.message}.` }; }
+    }
+    if (e.status === 423) return { ok: false, why: `View only: ${e.message}${lk ? ` (their lock runs to ${lk.until.slice(11, 16)} UTC unless they keep working)` : ""}. You can look and listen; open it again later to edit.` };
+    return { ok: false, why: `View only: ${e.message}` };
+  }
+}
+async function relock(stem) {  // our lock lapsed (we were idle): take it back if it's free
+  const r = await takeLock(stem, S.meta);
+  if (S.stem !== stem) return false;
+  S.lockHeld = r.ok;
+  if (!r.ok) { S.readOnly = true; S.readOnlyWhy = r.why; const bw = $("banner-warn"); bw.className = "banner warn"; bw.textContent = `🔒 ${r.why}  Your last edits are in your draft.`; updateStatus(); }
+  return r.ok;
+}
+function releaseLock(stem) {
+  fetch(`${API_BASE}/api/lock?stem=${encodeURIComponent(stem)}`, { method: "POST", keepalive: true, headers: { ...apiHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ action: "release" }) }).catch(() => {});
+}
+function noteActivity() { S.lastActivity = Date.now(); }
+document.addEventListener("keydown", noteActivity, true);
+document.addEventListener("mousedown", noteActivity, true);
+setInterval(async () => {  // renew while you're working; an idle tab lets its lock lapse for others
+  if (!CFG.hosted || !S.stem || !S.lockHeld) return;
+  if (Date.now() - S.lastActivity > CFG.lock_ttl_s * 1000) return;
+  try { await api(`/api/lock?stem=${encodeURIComponent(S.stem)}`, { action: "renew" }); }
+  catch (e) { if (e.status === 423) await relock(S.stem); }
+}, 60000);
 
 // ---------------------------------------------------------------- info panels
 function updateStatus() {
   const st = $("status");
   st.className = S.dirty ? "dirty" : "";
   st.textContent = !S.meta ? "" : S.dirty ? `● unsaved${S.lastDraft ? ` · draft autosaved ${S.lastDraft.slice(11, 19)}` : ""}` : "saved / unchanged";
-  $("btn-save").disabled = !S.meta || !S.duration || !!S.meta.error;
+  $("btn-save").disabled = !S.meta || !S.duration || !!S.meta.error || S.readOnly || (CFG.hosted && !CFG.saving);
+  if (CFG.hosted && !CFG.saving) $("btn-save").title = "Saving isn't switched on yet on this server: your work autosaves as a draft";
   $("btn-undo").disabled = !S.undo.length; $("btn-redo").disabled = !S.redo.length;
 }
 function updateInfo() {
@@ -926,7 +1040,7 @@ window.addEventListener("mousemove", (e) => {
   const d = S.drag;
   if (d && d.kind === "move") cvOv.style.cursor = "grabbing";
   if (d && d.kind === "move") {
-    if (!d.moved && Math.abs(x - d.x0) > 2) { d.moved = true; checkpoint(); }
+    if (!d.moved && Math.abs(x - d.x0) > 2) { if (S.readOnly) { S.drag = null; viewOnly(); drawOverlay(); return; } d.moved = true; checkpoint(); }
     if (d.moved) { const dt = (x - d.x0) * S.view.dur / W; for (const o of S.onsets) if (d.orig.has(o.id)) o.time = clamp(d.orig.get(o.id) + dt, 0, S.duration); drawMain(); }
   } else if (d && d.kind === "region") {
     if (Math.abs(x - d.x0) > 3) { d.moved = true; const t = clamp(x2t(x), 0, S.duration); S.region = [Math.min(d.t0, t), Math.max(d.t0, t)]; drawMain(); }
@@ -1068,10 +1182,37 @@ $("click-vol").addEventListener("input", (e) => clickGain.gain.value = +e.target
 $("music-vol").addEventListener("input", (e) => musicGain.gain.value = +e.target.value);
 clickGain.gain.value = +$("click-vol").value; musicGain.gain.value = +$("music-vol").value;
 window.addEventListener("resize", resize);
-window.addEventListener("beforeunload", (e) => { if (S.dirty) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", (e) => { if (S.dirty && !S.readOnly) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("pagehide", () => { if (CFG.hosted && S.stem && S.lockHeld) releaseLock(S.stem); });
+
+// ---------------------------------------------------------------- hosted: who you are
+function updateWho() {
+  const w = $("who"); w.style.display = CFG.hosted ? "" : "none";
+  w.textContent = contributor() ? `you: ${contributor()}` : "you: anonymous";
+}
+$("who").onclick = () => { openModal("settings"); $("contributor").focus(); };
+$("contributor").value = contributor();
+$("contributor").addEventListener("change", (e) => {
+  const v = e.target.value.normalize("NFC").trim().replace(/\s+/g, " ");
+  if (!NAME_RE.test(v)) { $("contributor-err").textContent = "Only letters, digits, spaces and . ' - _ (up to 40)."; return; }
+  $("contributor-err").textContent = "";
+  try { localStorage.setItem(NAME_KEY, v); } catch (err) { /* private window: not remembered */ }
+  updateWho();
+  if (S.stem && S.lockHeld) api(`/api/lock?stem=${encodeURIComponent(S.stem)}`, { action: "acquire" }).catch(() => {});
+  toast(v ? `you're now "${v}": drafts and saves go under this name` : "you're anonymous now");
+});
 
 resize();
-loadTracks().then(() => {
+// A page configured with an API URL is the hosted page even if the API is unreachable right now.
+api("/api/config").catch((e) => { toast(`can't reach the reviewer's server: ${e.message}`, 8000); return { hosted: !!API_BASE, seeds: [] }; }).then((c) => {
+  CFG = { ...CFG, ...c };
+  if (CFG.hosted) {
+    $("you-settings").style.display = ""; $("help-hosted").style.display = "";
+    $("btn-save").textContent = "Submit"; $("btn-save").title = "Submit the 100%-reviewed track to the corpus (Ctrl+S)";
+  }
+  updateWho();
+  return loadTracks();
+}).then(() => {
   const h = decodeURIComponent(location.hash.slice(1));
   if (h && S.tracks.some(t => t.stem === h)) openTrack(h); else openTracks();
   let seen = null;

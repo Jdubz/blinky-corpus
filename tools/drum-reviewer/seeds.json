@@ -1,0 +1,18 @@
+{
+  "_doc": "Seed sources for the drum reviewer, best first. A track opens from its human file (edm/drums_human/) if there is one, else from the first source below that has a file for it (and isn't marked skipped). Each source is one directory under edm/ of kick_weighted-schema files: {\"onsets\": [{\"time\": s, \"type\": \"kick\"|\"snare\"|\"hihat\"|...}]}. To add a better seed (e.g. drums after source separation), add its directory and put its entry first. labelcheck.py reads this file too: the counts check compares against every source listed here.",
+  "seeds": [
+    {
+      "name": "drums_adtof",
+      "dir": "drums_adtof",
+      "suffix": ".kick_weighted.json",
+      "label": "ADTOF"
+    },
+    {
+      "name": "kick_weighted",
+      "dir": "kick_weighted",
+      "suffix": ".kick_weighted.json",
+      "label": "band detector (known bad)",
+      "warning": "Seeded from kick_weighted: band-detector labels, known bad (e.g. most snares labelled kicks). Check every hit."
+    }
+  ]
+}
