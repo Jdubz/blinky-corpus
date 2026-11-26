@@ -1,0 +1,54 @@
+name: Labels sync
+
+# The labels service (blinky_time labels-service/; page https://blinky-time.joshwentworth.com/labels/)
+# holds no credential. This workflow pulls the tracks people edited from its public export and
+# publishes them here as one auto-merging batch (tools/labels/sync.py has the steps).
+#
+# TRUST. Every check here is main's code:
+#   * `schedule` always runs the default branch's copy of this workflow, and the job checks out main
+#     and runs main's tools/labels/sync.py and labelcheck.py. (workflow_dispatch runs the dispatched
+#     ref's copy, but only someone with write access can dispatch.)
+#   * The export is untrusted input: only edm/drums_human/<known track>.drums.json files, within size
+#     caps, that parse and pass main's label checks, are written, on a labels/auto-* branch made from
+#     main; sync.py then checks the commit with `labelcheck --only-labels` (nothing outside
+#     edm/drums_human/ changed) before pushing.
+#   * A push made with GITHUB_TOKEN starts no workflow, so sync.py starts tests.yml on the branch with
+#     workflow_dispatch: its "Scoring tests" job is main's required check. That run uses the BRANCH'S
+#     copy of tests.yml and the scripts it calls. That's safe only because this job is the only writer
+#     of labels/auto-* branches, and it writes nothing but label files on top of main: the branch's
+#     workflows and scripts ARE main's. (The labels service can't push anything at all.)
+#
+# Permissions: contents (push the batch branch), pull-requests (open it, turn on auto-merge), actions
+# (start tests.yml on the branch). No secrets.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # GitHub may run it later than this under load
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: labels-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Pull the shared labels, publish a batch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: main
+        fetch-depth: 0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Sync
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/labels/sync.py --api https://blinky-labels-api.joshwentworth.com

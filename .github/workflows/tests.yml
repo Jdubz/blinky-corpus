@@ -5,10 +5,11 @@ on:
     # labeled/unlabeled: the owner's `labels-override` label re-runs the human-label checks.
     types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
-    # labels/**: the labels service (blinky_time labels-service/) pushes its batches as branches, and
-    # labels-pr.yml opens their PRs with GITHUB_TOKEN. Such a PR starts no `pull_request` run, so the
-    # required check on its head ("Scoring tests") comes from THIS push run on the same commit.
-    branches: [main, 'labels/**']
+    branches: [main]
+  # labels-sync.yml starts this on its labels/auto-* batch branch: a push and a PR made with
+  # GITHUB_TOKEN start no run, so the required check on the batch's head ("Scoring tests") comes
+  # from this dispatched run on the same commit.
+  workflow_dispatch:
 
 jobs:
   topology:
@@ -34,8 +35,8 @@ jobs:
     # This job is the required check on main, so a label file that fails here can't auto-merge.
     # Anti-vandalism only (tools/labels/labelcheck.py): every changed human file matches the schema,
     # doesn't delete more than half of what main has and leaves no class empty that a reference has.
-    # A labels/** branch may change nothing else. A batch that fails stays open for the owner. On
-    # main: every human file's schema.
+    # A labels/** branch (dispatched by labels-sync.yml) may change nothing else. A batch that fails
+    # stays open for the owner. On main: every human file's schema.
     - name: Human label files
       env:
         BASE_REF: ${{ github.base_ref }}

@@ -4,7 +4,7 @@ The label checks for `edm/drums_human/`, and the seed sources' precedence. The r
 
 ## labelcheck.py: anti-vandalism, not process
 
-The labels service publishes everyone's edits by itself, in batches. Each batch is a `labels/auto-*` branch whose PR `labels-pr.yml` opens with auto-merge on. The gate is this script in the required **Scoring tests** job (`tests.yml`, which also runs on push to `labels/**`). Every changed human file must:
+The labels service holds no credential. `.github/workflows/labels-sync.yml` runs on a schedule (main's own code) and runs `sync.py`. It pulls the service's export, treats it as untrusted, writes only label files that pass these checks onto a `labels/auto-*` branch made from `main`, starts `tests.yml` on it and auto-merges the PR. The gate is this script, run by `sync.py` and again in the required **Scoring tests** job. Every changed human file must:
 
 1. be added or modified, never deleted or renamed;
 2. match the schema: keys, types, sorted 4-decimal onsets, merged reviewed ranges, the mp3's sha256 and the manifest duration;
@@ -12,7 +12,7 @@ The labels service publishes everyone's edits by itself, in batches. Each batch 
    - it may not delete more than half of that file's hits (counted regardless of class, so re-classing isn't deleting);
    - it may not leave a class empty while a reference has hits in it.
 
-A `labels/` branch may change nothing but human label files (`--only-labels`). A batch that fails stays open for the owner, and the alert fires.
+A `labels/` branch may change nothing but human label files (`--only-labels`). A file that fails is left out of the batch, and a batch that fails CI stays open for the owner.
 
 Partial progress is fine: the scorer uses a human file only once it's `complete`. The owner's `labels-override` PR label skips step 3 on ordinary PRs. Git history is the undo: revert on `main`, and the labels service takes `main`'s version.
 
