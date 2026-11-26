@@ -100,6 +100,51 @@ def test_schema_problems(repo, mutate, expect):
     assert any(expect in x for x in p), p
 
 
+GOOD_NOTES = [{"text": "snares under the filter sweep 1:20-1:45 all dropped", "range": [1.0, 4.5]},
+              {"text": "ADTOF calls the rim shots hats", "range": None},
+              {"text": "kick < snare here, <b>not</b> HTML: plain text \u00e9", "range": [0.0, DUR]}]
+
+
+def test_reviewer_notes_are_accepted(repo):
+    doc = human(repo / "edm", "a", notes=GOOD_NOTES)
+    assert check(repo, "a", doc) == []
+    assert check(repo, "a", human(repo / "edm", "a", notes=[])) == []
+    # they round-trip through the file format, one per line
+    text = lc.dumps_doc(doc)
+    assert json.loads(text)["notes"] == GOOD_NOTES and text.count('{"text": ') == 3
+
+
+@pytest.mark.parametrize("notes,expect", [
+    ("snares dropped", "notes must be a list"),
+    ([{"text": "x", "range": None}] * (lc.MAX_NOTES + 1), "notes must be a list"),
+    ([{"text": "x"}], "malformed note"),
+    ([{"text": "x", "range": None, "author": "me"}], "malformed note"),
+    (["x"], "malformed note"),
+    ([{"text": "", "range": None}], "1-1000 characters"),
+    ([{"text": "x" * (lc.MAX_NOTE_CHARS + 1), "range": None}], "1-1000 characters"),
+    ([{"text": 5, "range": None}], "1-1000 characters"),
+    ([{"text": "bell\x07", "range": None}], "control or format"),
+    ([{"text": "two\nlines", "range": None}], "control or format"),
+    ([{"text": "rtl \u202e override", "range": None}], "control or format"),
+    ([{"text": "zero\u200bwidth", "range": None}], "control or format"),
+    ([{"text": " padded", "range": None}], "control or format"),
+    ([{"text": "x", "range": [2.0, 1.0]}], "bad note range"),
+    ([{"text": "x", "range": [0.0, DUR + 5]}], "bad note range"),
+    ([{"text": "x", "range": [0.12345, 1.0]}], "bad note range"),
+    ([{"text": "x", "range": [0.0]}], "bad note range"),
+    ([{"text": "x", "range": "0-1"}], "bad note range"),
+])
+def test_bad_reviewer_notes_are_refused(repo, notes, expect):
+    p = check(repo, "a", human(repo / "edm", "a", notes=notes))
+    assert any(expect in x for x in p), p
+
+
+def test_clean_note_text():
+    assert lc.clean_note_text("  snares\u202e under\tthe\x00 sweep\n1:20  ") == "snares under the sweep 1:20"
+    assert lc.clean_note_text("\u200b\u2028") == ""
+    assert lc.clean_note_text("<script>x</script> \u00e9") == "<script>x</script> \u00e9"  # data, kept as text
+
+
 def test_partial_progress_is_fine(repo):
     # the scorer only uses a complete file, so partial ones are accepted
     assert check(repo, "a", human(repo / "edm", "a", ranges=[(0, 6)])) == []
