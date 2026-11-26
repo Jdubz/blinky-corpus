@@ -92,7 +92,7 @@ class Corpus:
         self.human_dir = self.edm / labelcheck.HUMAN_DIR
         self.draft_dir = self.human_dir / ".drafts"
         self._seeds_file = seeds_file
-        self._seeds: tuple[float, list[labelcheck.SeedSource]] | None = None
+        self._seeds: tuple[float, tuple[list[labelcheck.SeedSource], list[labelcheck.SeedSource]]] | None = None
         self._sha_cache: dict[str, tuple[float, int, str]] = {}
         self._lock = threading.Lock()
 
@@ -104,13 +104,20 @@ class Corpus:
         own = self.edm.parent / "tools" / "drum-reviewer" / "seeds.json"
         return own if own.is_file() else labelcheck.DEFAULT_SEEDS_FILE
 
-    def seeds(self) -> list[labelcheck.SeedSource]:
+    def _sources(self) -> tuple[list[labelcheck.SeedSource], list[labelcheck.SeedSource]]:
         f = self.seeds_file()
         mtime = f.stat().st_mtime
         with self._lock:
             if self._seeds is None or self._seeds[0] != mtime:
-                self._seeds = (mtime, labelcheck.load_seeds(f))
+                self._seeds = (mtime, labelcheck.load_sources(f))
             return self._seeds[1]
+
+    def seeds(self) -> list[labelcheck.SeedSource]:
+        return self._sources()[0]
+
+    def references(self) -> list[labelcheck.SeedSource]:
+        """Reference-only label sets (seeds.json "references"): ghost ticks, never a seed."""
+        return self._sources()[1]
 
     # Every path built from a request goes through validate_stem() first, and the
     # result is checked to resolve inside its directory (belt and braces).
@@ -291,7 +298,9 @@ def list_tracks(c: Corpus) -> list[dict[str, Any]]:
 
 
 def seeds_public(c: Corpus) -> list[dict[str, Any]]:
-    return [{"name": s.name, "label": s.label, "warning": s.warning} for s in c.seeds()]
+    return ([{"name": s.name, "label": s.label, "warning": s.warning} for s in c.seeds()]
+            + [{"name": s.name, "label": s.label, "warning": s.warning, "reference": True}
+               for s in c.references()])
 
 
 def load_track(c: Corpus, stem: str, human_override: dict[str, Any] | None = None,
@@ -302,6 +311,12 @@ def load_track(c: Corpus, stem: str, human_override: dict[str, Any] | None = Non
     sha = c.audio_sha256(stem)
     seeds, skipped = seed_docs(c, stem)
     refs: dict[str, Any] = {s.seed.name: s.labels for s in seeds}
+    for r in c.references():  # reference-only sets: offered as ghost ticks, never seeded from
+        rp = c.seed_path(r, stem)
+        if rp.is_file():
+            rdoc = read_json(rp)
+            if not rdoc.get("skipped"):
+                refs[r.name] = split_auto_labels(rdoc, rp.name)
 
     out: dict[str, Any] = {
         "stem": stem,

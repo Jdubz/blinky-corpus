@@ -38,7 +38,7 @@ Every edit autosaves a draft to `edm/drums_human/.drafts/` (gitignored). Reopeni
 | snare | 150 Hz–5 kHz: envelope and onset strength; snare markers; optionally ADTOF hi-hats as faint read-only ticks along the top (Settings, off by default) |
 | reviewed | reviewed ranges (green) and unreviewed ones (red) |
 
-The `ref` menu draws ghost ticks along the bottom of each lane from ADTOF or the old band labels, for comparison. Band filtering is zero-phase (forward-backward Butterworth), so the lanes have no filter delay.
+The `ref` menu draws ghost ticks along the bottom of each lane from any seed source or reference set in `seeds.json`, for comparison. **ADTOF on drum stem** (`edm/drums_adtof_stem/`: ADTOF run on the HT-Demucs drum stem) finds many of the snares that mix-level ADTOF drops under filters, so a ghost tick with no label above it is worth a listen. Band filtering is zero-phase (forward-backward Butterworth), so the lanes have no filter delay.
 
 **Snap** moves a hit to the nearest strong onset-strength peak within ±25 ms. It's applied when you add a hit (toggle "snap on add") and when you press `N` on a selection. The offset is shown each time.
 
@@ -94,6 +94,8 @@ The track opens seeded from the first of these that exists:
    2. `edm/kick_weighted/<stem>.kick_weighted.json`: band-detector labels, known bad. The page shows a red warning.
 
 To add a better seed (for example drums after source separation), put its files in a new directory under `edm/` (kick_weighted schema: `onsets` of `{time, type}`) and add an entry at the top of `seeds.json`. The reviewer reads the corpus's own `seeds.json`, so a hosted service picks the new seed up when it's merged. The page's reference ticks and the label checks cover every source listed.
+
+`seeds.json` can also list `references`: reference-only label sets, in the same entry format. The page offers them as reference ticks, but they never seed a track and the label checks don't compare against them. Today that's `edm/drums_adtof_stem/`. A reference set becomes a seed only by moving its entry into `seeds`, once reviewed ranges show it's better.
 
 Saved file, `edm/drums_human/<stem>.drums.json`, one onset per line so corrections diff cleanly:
 

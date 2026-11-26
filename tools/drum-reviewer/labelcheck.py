@@ -21,7 +21,7 @@ A pull request that changes a human label file passes only if:
 
 `--override` (CI passes it when the owner labels the PR `labels-override`) skips step 4 only.
 
-Seed sources and their precedence come from seeds.json (see load_seeds). Python standard library only.
+Seed sources and their precedence come from seeds.json (see load_sources). Python standard library only.
 """
 
 from __future__ import annotations
@@ -148,31 +148,46 @@ class SeedSource:
         return edm / self.dir / f"{stem}{self.suffix}"
 
 
-def load_seeds(path: Path | None = None) -> list[SeedSource]:
-    path = path or DEFAULT_SEEDS_FILE
-    doc = json.loads(Path(path).read_text())
-    seeds = doc.get("seeds") if isinstance(doc, dict) else None
-    if not isinstance(seeds, list) or not seeds:
-        raise ValueError(f"{path}: expected a non-empty 'seeds' list")
+def _parse_sources(path: Path, entries: Any, key: str) -> list[SeedSource]:
+    if not isinstance(entries, list):
+        raise ValueError(f"{path}: '{key}' must be a list")
     out: list[SeedSource] = []
-    for s in seeds:
+    for s in entries:
         if not isinstance(s, dict):
-            raise ValueError(f"{path}: seed entries must be objects, got {s!r}")
+            raise ValueError(f"{path}: {key} entries must be objects, got {s!r}")
         name, d, suffix = s.get("name"), s.get("dir"), s.get("suffix")
         if not isinstance(name, str) or not SEED_NAME_RE.match(name) or name in ("human", "empty"):
-            raise ValueError(f"{path}: bad seed name {name!r}")
+            raise ValueError(f"{path}: bad {key} name {name!r}")
         if not isinstance(d, str) or not STEM_RE.match(d) or ".." in d or d == HUMAN_DIR:
-            raise ValueError(f"{path}: seed {name}: bad dir {d!r} (one directory under edm/)")
+            raise ValueError(f"{path}: {key} {name}: bad dir {d!r} (one directory under edm/)")
         if not isinstance(suffix, str) or not re.fullmatch(r"\.[A-Za-z0-9._-]{1,60}", suffix):
-            raise ValueError(f"{path}: seed {name}: bad suffix {suffix!r}")
+            raise ValueError(f"{path}: {key} {name}: bad suffix {suffix!r}")
         label = s.get("label", name)
         warning = s.get("warning")
         if not isinstance(label, str) or (warning is not None and not isinstance(warning, str)):
-            raise ValueError(f"{path}: seed {name}: label/warning must be strings")
+            raise ValueError(f"{path}: {key} {name}: label/warning must be strings")
         out.append(SeedSource(name, d, suffix, label, warning))
-    if len({s.name for s in out}) != len(out):
-        raise ValueError(f"{path}: duplicate seed names")
     return out
+
+
+def load_sources(path: Path | None = None) -> tuple[list[SeedSource], list[SeedSource]]:
+    """(seeds, references) from seeds.json. Seeds are in precedence order. References
+    ("references", optional) are reference-only label sets: the page offers them as ghost ticks,
+    but they never seed a track and the label checks don't compare against them."""
+    path = Path(path or DEFAULT_SEEDS_FILE)
+    doc = json.loads(path.read_text())
+    seeds = doc.get("seeds") if isinstance(doc, dict) else None
+    if not isinstance(seeds, list) or not seeds:
+        raise ValueError(f"{path}: expected a non-empty 'seeds' list")
+    out = _parse_sources(path, seeds, "seed")
+    refs = _parse_sources(path, doc.get("references", []), "reference")
+    if len({s.name for s in out + refs}) != len(out) + len(refs):
+        raise ValueError(f"{path}: duplicate seed names")
+    return out, refs
+
+
+def load_seeds(path: Path | None = None) -> list[SeedSource]:
+    return load_sources(path)[0]
 
 
 def split_auto_labels(doc: dict[str, Any], name: str) -> dict[str, Any]:
