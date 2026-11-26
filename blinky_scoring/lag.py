@@ -9,9 +9,10 @@ detection by one frame), never fitted per file. So, best first:
 1. **measured**: the caller measured the lag (e.g. `tools/device_eval.py`'s sync clicks). Used
    as is. The music is still searched in a narrow window around it (+-`CHECK_HALF_WIDTH_MS`)
    and a disagreement over the match tolerance is reported in `note`.
-2. **estimated**: no measurement, so the lag is searched for in the music. The box needs this:
-   its audio start is when ffplay was spawned, and its detections come 0.24-0.53 s later
-   (median 0.27 s), varying run to run (blinky-corpus PR evidence, 2026-11-25).
+2. **estimated**: no measurement, so the lag is searched for in the music. The box needs this
+   when its audio start wasn't measured: its start is then when the player was spawned, and
+   the detections come a player-dependent time later, varying run to run (`ACOUSTIC_ALSA`,
+   `ACOUSTIC_FFPLAY`: the caller passes the window of the player that ran).
 3. **fallback**: the music can't give a lag (too few detections near a label). The caller's
    fallback lag is used, and the run is scored and flagged, never dropped (review of #307).
 
@@ -150,12 +151,43 @@ class LagSearch:
 # (scoring.PLAUSIBLE_LATENCY_*); a tie goes to the lag nearest 0, as the nearest-label
 # estimator's did.
 SIMULATED = LagSearch(-50.0, 300.0, 0.0)
-# Acoustic runs on the test box: ffplay spawn -> speaker -> mic -> detection. Box runs on
-# 2026-11-24..25 (27 runs whose lag the music fixes, 3-5 per firmware, 1-5 per track; corpus
-# PR evidence): median 272 ms, p10 245, p90 337, one slow start at 530. The window keeps
-# ~135 ms below the fastest and ~170 above the slowest and no wider: every extra beat period
-# of width is another alias.
-ACOUSTIC = LagSearch(100.0, 700.0, 270.0)
+# Acoustic runs on the test box: player spawn -> DAC -> speaker -> mic -> detection. The box
+# measures when the first sample reached the DAC (blinky_time `testing/alsa_play.py`) and
+# passes the lag it measured, so these windows only serve runs whose start wasn't measured. The
+# tie-break prior is the typical lag of the player that ran, so the caller picks the window by
+# player (`acoustic_search`); the window is the same for both.
+#
+# ffplay (the box's player up to 2026-11-25, and its fallback when the ALSA player can't play):
+# box runs on 2026-11-24..25 (27 runs whose lag the music fixes, 3-5 per firmware, 1-5 per
+# track; blinky-corpus#10 evidence): median 272 ms, p10 245, p90 337, one slow start at 530.
+# The window keeps ~135 ms below the fastest and ~170 above the slowest and no wider: every
+# extra beat period of width is another alias.
+ACOUSTIC_FFPLAY = LagSearch(100.0, 700.0, 270.0)
+# The ALSA player (blinky_time bt#429/#432), when it played but its start wasn't trusted (a
+# timestamp spread over 10 ms, an underrun, no calibrated path): it starts sooner than ffplay
+# (no SDL chunks of silence before the seeked audio). Box runs on 2026-11-25 (56 runs, 18
+# tracks, firmware b211-dev-c5f4d51a): the lag the music fixes, from the scorer's search with
+# the measured lag off (the 14 unambiguous of 28 runs) or its check around the measured lag
+# (26 of 28 runs; dubstep-edm-halftime and edm-trap-electro, kickR50 0.25-0.31, left out),
+# 40 runs: 199-248 ms, median 219, p10 206, p90 241. The spawn-to-DAC offset over all 56 was
+# 155-201 ms, median 172: Python and ffmpeg's start-up, which still sets the lag when the ALSA
+# timestamps can't vouch for it. The prior is the median on the 10 ms grid; the window stays
+# the ffplay one (it holds both, and an underrun makes the audio after it later still).
+ACOUSTIC_ALSA = LagSearch(100.0, 700.0, 220.0)
+# The box's players by the name its raw captures record (`audio_start.method`).
+ACOUSTIC_BY_PLAYER = {"alsa": ACOUSTIC_ALSA, "ffplay": ACOUSTIC_FFPLAY}
+
+
+def acoustic_search(player: str) -> LagSearch:
+    """The window and prior for an acoustic box run played by `player` ("alsa" or "ffplay",
+    as the run's capture records it). An unknown player raises: a guessed prior would resolve
+    every periodic track's tie the wrong way without a word."""
+    try:
+        return ACOUSTIC_BY_PLAYER[player]
+    except KeyError:
+        raise ValueError(
+            f"unknown audio player {player!r}: expected one of {sorted(ACOUSTIC_BY_PLAYER)}"
+        ) from None
 
 
 @dataclass(frozen=True)
