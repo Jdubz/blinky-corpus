@@ -362,8 +362,8 @@ const S = {
 const API_BASE = (document.querySelector('meta[name="drum-reviewer-api"]')?.content || "").replace(/\/+$/, "");
 let CFG = { hosted: false, seeds: [], saving: true, lock_ttl_s: 900 };
 const NAME_KEY = "drumReviewer.contributor.v1", CLIENT_KEY = "drumReviewer.client.v1";
-const NAME_RE = /^[\p{L}\p{N}\p{M}_ .'-]{0,40}$/u;
-function contributor() { try { return localStorage.getItem(NAME_KEY) || ""; } catch (e) { return ""; } }
+const NAME_RE = /^[\p{L}\p{M}\p{N}_ .'-]{0,40}$/u;  // the server's rule (hosted.name_ok), after NFC
+function contributor() { let v = ""; try { v = localStorage.getItem(NAME_KEY) || ""; } catch (e) { v = ""; } v = v.normalize("NFC"); return NAME_RE.test(v) ? v : ""; }
 const CLIENT_ID = (() => {  // per tab: two tabs are two editors, and the edit lock keeps them apart
   let id = null;
   try { id = sessionStorage.getItem(CLIENT_KEY); } catch (e) { id = null; }
@@ -1193,7 +1193,7 @@ function updateWho() {
 $("who").onclick = () => { openModal("settings"); $("contributor").focus(); };
 $("contributor").value = contributor();
 $("contributor").addEventListener("change", (e) => {
-  const v = e.target.value.trim().replace(/\s+/g, " ");
+  const v = e.target.value.normalize("NFC").trim().replace(/\s+/g, " ");
   if (!NAME_RE.test(v)) { $("contributor-err").textContent = "Only letters, digits, spaces and . ' - _ (up to 40)."; return; }
   $("contributor-err").textContent = "";
   try { localStorage.setItem(NAME_KEY, v); } catch (err) { /* private window: not remembered */ }
@@ -1203,7 +1203,8 @@ $("contributor").addEventListener("change", (e) => {
 });
 
 resize();
-api("/api/config").catch(() => ({ hosted: false, seeds: [] })).then((c) => {
+// A page configured with an API URL is the hosted page even if the API is unreachable right now.
+api("/api/config").catch((e) => { toast(`can't reach the reviewer's server: ${e.message}`, 8000); return { hosted: !!API_BASE, seeds: [] }; }).then((c) => {
   CFG = { ...CFG, ...c };
   if (CFG.hosted) {
     $("you-settings").style.display = ""; $("help-hosted").style.display = "";

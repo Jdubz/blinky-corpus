@@ -196,12 +196,14 @@ def test_rate_limiter():
 
 
 @pytest.mark.parametrize("raw,ok", [("Ana", "Ana"), ("  José   M. ", "José M."), ("", ""),
-                                    ("O'Neil-Smith_2", "O'Neil-Smith_2"), ("李雷", "李雷")])
+                                    ("O'Neil-Smith_2", "O'Neil-Smith_2"), ("李雷", "李雷"),
+                                    ("अमित", "अमित"), ("Jose\u0301", "José")])  # marks; NFD -> NFC
 def test_names(raw, ok):
     assert hosted.normalize_name(raw) == ok
 
 
-@pytest.mark.parametrize("raw", ["@owner", "a" * 41, "<b>x</b>", "x`y", "nul\x00byte"])
+@pytest.mark.parametrize("raw", ["@owner", "a" * 41, "<b>x</b>", "x`y", "nul\x00byte", "zero\u200bwidth",
+                                 "Ana\U0001F600"])
 def test_bad_names(raw):
     with pytest.raises(ValueError):
         hosted.normalize_name(raw)
@@ -594,3 +596,34 @@ def test_what_the_server_writes_passes_corpus_ci(edm, ranges):
             "reviewed_ranges": ranges}
     doc = json.loads(labelcheck.dumps_doc(srv.validate_doc(c, "a", body, existing=None)))
     assert labelcheck.check_schema(doc, "a", sha(edm / "a.mp3"), DUR) == []
+
+
+NAME_SAMPLES = ["Ana", "José M.", "Jose\u0301", "अमित", "李雷", "\U0001D504na", "٣٤", "Ana\u00a0B", "  x  y ",
+                "O'Neil-Smith_2", "a@b", "<b>", "x`y", "zero\u200bwidth", "Ana\U0001F600", "a" * 40, "a" * 41,
+                "e\u0301" * 21, "tab\there", ""]
+
+
+def test_page_and_server_agree_on_names():
+    """A name the page accepts but the server refuses would make every API call fail (400)."""
+    import re
+    import shutil
+
+    node = shutil.which("node")
+    assert node, "node is needed to run the page's name check (CI has it)"
+    page = (TOOLS / "index.html").read_text()
+    regex = re.search(r"const NAME_RE = (/.+?/u);", page).group(1)
+    js = (f"const NAME_RE = {regex};\n"
+          "const names = JSON.parse(require('fs').readFileSync(0, 'utf8'));\n"
+          "console.log(JSON.stringify(names.map(n => NAME_RE.test(n.normalize('NFC').trim().replace(/\\s+/g, ' ')))));")
+    out = subprocess.run([node, "-e", js], input=json.dumps(NAME_SAMPLES), capture_output=True, text=True,
+                         check=True).stdout
+    page_ok = json.loads(out)
+
+    def server_ok(n):
+        try:
+            hosted.normalize_name(n)
+            return True
+        except ValueError:
+            return False
+
+    assert {n: p for n, p in zip(NAME_SAMPLES, page_ok)} == {n: server_ok(n) for n in NAME_SAMPLES}

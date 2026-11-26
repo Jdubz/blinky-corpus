@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -35,8 +36,8 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 CLIENT_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
-NAME_RE = re.compile(r"^[\w .'-]{0,40}$")  # \w is Unicode: names in any script, but no '@' or markup
 NAME_MAX = 40
+NAME_PUNCT = " .'-_"  # besides letters, marks and digits in any script: no '@', markup or control chars
 
 
 def now_iso() -> str:
@@ -66,11 +67,17 @@ def git_blob_sha(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
+def name_ok(name: str) -> bool:
+    """The page checks the same rule (index.html NAME_RE: [\\p{L}\\p{M}\\p{N}_ .'-]{0,40} after NFC)."""
+    return len(name) <= NAME_MAX and all(
+        unicodedata.category(ch)[0] in "LMN" or ch in NAME_PUNCT for ch in name)
+
+
 def normalize_name(raw: str | None) -> str:
-    """A contributor's self-entered name: trimmed, single-spaced, at most 40 characters of letters,
-    digits, spaces and . ' - _. Raises ValueError otherwise ('' means anonymous)."""
-    name = " ".join((raw or "").split())
-    if len(name) > NAME_MAX or not NAME_RE.match(name):
+    """A contributor's self-entered name: NFC, trimmed, single-spaced, at most 40 letters, marks,
+    digits (any script), spaces and . ' - _. Raises ValueError otherwise ('' means anonymous)."""
+    name = " ".join(unicodedata.normalize("NFC", raw or "").split())
+    if not name_ok(name):
         raise ValueError("a name may use up to 40 letters, digits, spaces and . ' - _")
     return name
 
