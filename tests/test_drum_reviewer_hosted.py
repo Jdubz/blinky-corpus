@@ -479,6 +479,23 @@ def test_merged_then_landed(env):
     assert t["pending"] is None and t["seed"] == "human" and t["version"].startswith("m-")
 
 
+def test_own_merge_seen_on_main_first_is_not_a_conflict(env):
+    """The squash merge reaches main (and the clone) before the throttled PR lookup reports it:
+    main then holds this save's own file, which is a landing, not a conflict."""
+    b = saved(env)
+    text = env.show(b["branch"], HUMAN_A)
+    env.fake.open_pr(b["branch"])
+    env.app.tick()  # PR picked up, still open
+    env.push_to_main({HUMAN_A: text}, "the squash merge")  # the lookup hasn't said "merged" yet
+    env.app.publisher.poll_every = 3600  # and won't, this tick
+    env.app.tick()
+    assert not env.events("pr_conflict") and not env.events("branch_rebased")
+    assert env.app.pending.get("a") is None and env.events("pr_landed")[0]["in_checkout"] is True
+    t = env.req("GET", "/api/track?stem=a")[2]
+    assert t["draft"] is None and t["seed"] == "human" and t["pending"] is None
+    assert env.branches() == []
+
+
 def test_closed_pr_comes_back_as_a_draft(env):
     b = saved(env)
     onsets = json.loads(env.show(b["branch"], HUMAN_A))["onsets"]

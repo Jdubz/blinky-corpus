@@ -792,7 +792,13 @@ class HostedApp:
             if rec["state"] == "open" and self.publisher is not None:
                 try:
                     upd = self.publisher.rebase_if_behind(rec)
-                    if upd:
+                    if upd and upd.get("landed"):  # main already has it: its own merge
+                        self.pending.update(stem, state="merged", merged_at=time.time())
+                        self.log.emit("pr_merged", stem=stem, pr=rec.get("pr"),
+                                      contributor=rec["contributor"], seen="on main")
+                        self.publisher.cleanup(rec)
+                        rec = self.pending.get(stem) or rec
+                    elif upd:
                         self.pending.update(stem, **upd)
                         rec.update(upd)
                 except hosted.Conflict as e:  # main changed this very file: the PR can't merge
@@ -803,27 +809,28 @@ class HostedApp:
                     continue
                 except (hosted.GitHubError, RuntimeError) as e:
                     self.log.emit("rebase_failed", stem=stem, branch=rec["branch"], error=str(e)[:300])
-                try:
-                    st, pr = self.publisher.poll(rec)
-                except hosted.GitHubError as e:
-                    self.log.emit("pr_poll_failed", stem=stem, branch=rec["branch"], error=e.message[:200])
-                    continue
-                if pr is not None and rec.get("pr") != pr.get("number"):
-                    self.pending.update(stem, pr=pr["number"], url=pr["html_url"])
-                    rec.update(pr=pr["number"], url=pr["html_url"])
-                    self.log.emit("pr_opened", stem=stem, pr=pr["number"], branch=rec["branch"])
-                if st == "merged":
-                    self.pending.update(stem, state="merged", merged_at=time.time())
-                    self.log.emit("pr_merged", stem=stem, pr=rec.get("pr"), contributor=rec["contributor"])
-                    self.publisher.cleanup(rec)
-                elif st == "closed":
-                    self._restore_draft(stem, rec)
-                    self.pending.clear(stem)
-                    self.log.emit("pr_closed", stem=stem, pr=rec.get("pr"), contributor=rec["contributor"])
-                    self.publisher.cleanup(rec)
-                    continue
-                elif st == "waiting" and time.time() - rec.get("created_t", time.time()) > 1800:
-                    self.log.emit("pr_missing", stem=stem, branch=rec["branch"])  # workflow didn't open it
+                if rec.get("state") == "open":  # not just seen merged on main above
+                    try:
+                        st, pr = self.publisher.poll(rec)
+                    except hosted.GitHubError as e:
+                        self.log.emit("pr_poll_failed", stem=stem, branch=rec["branch"], error=e.message[:200])
+                        continue
+                    if pr is not None and rec.get("pr") != pr.get("number"):
+                        self.pending.update(stem, pr=pr["number"], url=pr["html_url"])
+                        rec.update(pr=pr["number"], url=pr["html_url"])
+                        self.log.emit("pr_opened", stem=stem, pr=pr["number"], branch=rec["branch"])
+                    if st == "merged":
+                        self.pending.update(stem, state="merged", merged_at=time.time())
+                        self.log.emit("pr_merged", stem=stem, pr=rec.get("pr"), contributor=rec["contributor"])
+                        self.publisher.cleanup(rec)
+                    elif st == "closed":
+                        self._restore_draft(stem, rec)
+                        self.pending.clear(stem)
+                        self.log.emit("pr_closed", stem=stem, pr=rec.get("pr"), contributor=rec["contributor"])
+                        self.publisher.cleanup(rec)
+                        continue
+                    elif st == "waiting" and time.time() - rec.get("created_t", time.time()) > 1800:
+                        self.log.emit("pr_missing", stem=stem, branch=rec["branch"])  # workflow didn't open it
             rec = self.pending.get(stem)
             if rec and rec["state"] == "merged":
                 with self.rw.read():

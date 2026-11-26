@@ -498,12 +498,16 @@ class GitPusher:
     def rebase_if_behind(self, rec: dict[str, Any]) -> dict[str, Any] | None:
         """If the base branch moved since the branch was made, rebuild the branch on the new head and
         force-push it (with a lease on the commit we pushed). Returns the updated fields, or None.
-        Raises Conflict when the base branch changed the label file itself."""
+        {"landed": True} when the base already holds this save's file (its own squash merge, seen
+        before the PR lookup says so). Raises Conflict when the base changed the file otherwise."""
         with self._lock:
             base = self._base_head()
             if base == rec["base"]:
                 return None
-            if self._blob_at(base, rec["path"]) != rec.get("expected"):
+            on_base = self._blob_at(base, rec["path"])
+            if on_base == rec["blob"]:
+                return {"landed": True}
+            if on_base != rec.get("expected"):
                 raise Conflict(f"{rec['path']} changed on {self.base} while the PR was open")
             commit = self._commit(base, rec["path"], rec["blob"], rec["message"], rec["author"])
             try:
