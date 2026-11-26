@@ -212,8 +212,8 @@ def score_drums(
     `lag_ms` is the caller's measured lag, used as is (and cross-checked against the music,
     reported in `lag`). Without it the lag is searched for against kicks + snares within
     `lag_search`'s window: the default fits simulated runs (a few frames of detector delay);
-    acoustic runs pass `lag.ACOUSTIC`. When the music gives no lag (too few
-    detections near a label, e.g. a detector a tuning value has silenced), the run is scored
+    acoustic runs pass their player's (`lag.acoustic_search`). When the music gives no lag (too
+    few detections near a label, e.g. a detector a tuning value has silenced), the run is scored
     at `fallback_lag_ms` and flagged (`lag_estimated` False, `lag.source` "fallback"), never
     dropped: dropping it would let a tuner prefer values that silence the detector (review of
     #307). Metrics are NaN only where the labels themselves are empty (e.g. no kicks)."""

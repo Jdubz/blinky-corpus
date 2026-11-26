@@ -17,6 +17,7 @@ import statistics
 from collections import defaultdict
 from typing import Any, NotRequired, TypedDict
 
+from .lag import ACOUSTIC_FFPLAY, LagSearch
 from .types import (
     ActivationStats,
     DeviceRunScore,
@@ -268,6 +269,8 @@ def score_device_run(
     audio_start_time: float,
     gt_data: GroundTruth,
     latency_ms: float | None = None,
+    *,
+    lag_search: LagSearch = ACOUSTIC_FFPLAY,
 ) -> DeviceRunScore:
     """Score a single device's test recording against ground truth.
 
@@ -276,6 +279,10 @@ def score_device_run(
     reported). The estimate matches each detection to the nearest reference
     onset, so on dense tracks it can be off by tens of ms; a runner that
     measures latency directly (tools/device_eval.py: sync clicks) passes it.
+
+    `lag_search` is where the drum scorer looks for the lag when `latency_ms` is None
+    (`lag.acoustic_search(player)`: the window and tie-break prior of the player that ran).
+    The default is ffplay's, the box's only player before it measured its audio start.
 
     Computes onset F1 (at multiple tolerances) and PLP pattern metrics.
     """
@@ -657,7 +664,6 @@ def score_device_run(
     drums = None
     if gt_data.drums is not None:
         from .drum_scoring import score_drums
-        from .lag import ACOUSTIC
 
         drums = score_drums(
             [(d["timestamp_ms"] / 1000.0, d["strength"]) for d in detections],
@@ -665,7 +671,7 @@ def score_device_run(
             raw_duration / 1000.0,
             lag_ms=latency_ms,
             fallback_lag_ms=latency_correction_ms,  # the onset scoring's correction
-            lag_search=ACOUSTIC,
+            lag_search=lag_search,
         ).as_dict()
 
     return DeviceRunScore(

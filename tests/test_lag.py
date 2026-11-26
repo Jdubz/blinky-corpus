@@ -9,17 +9,19 @@ import pytest
 
 from blinky_scoring.drum_scoring import score_drums
 from blinky_scoring.lag import (
-    ACOUSTIC,
+    ACOUSTIC_ALSA,
+    ACOUSTIC_FFPLAY,
     ESTIMATED,
     FALLBACK,
     MEASURED,
     SIMULATED,
     LagSearch,
+    acoustic_search,
     estimate_lag,
     mcnemar_p,
 )
-from blinky_scoring.scoring import estimate_audio_latency
-from blinky_scoring.types import DrumLabels
+from blinky_scoring.scoring import estimate_audio_latency, score_device_run
+from blinky_scoring.types import DrumLabels, GroundTruth, TestData, TransientEvent
 
 TOL = 0.05
 
@@ -65,10 +67,10 @@ def test_a_box_lag_over_half_the_label_spacing_is_found() -> None:
     d = detect(ref, 0.300, jitter_s=0.008, keep=0.8, extra=10, span=32.0)
     old = nearest_label_estimate(d, ref, 32.0)
     assert old is not None and abs(old - 300) > 100
-    est = estimate_lag(d, ref, 32.0, search=ACOUSTIC, tol_s=TOL)
+    est = estimate_lag(d, ref, 32.0, search=ACOUSTIC_FFPLAY, tol_s=TOL)
     assert est.source == ESTIMATED and not est.ambiguous and est.note is None
     assert abs(est.lag_ms - 300) < 10
-    s = score_drums(d, DrumLabels(kicks, snares, []), 32.0, lag_search=ACOUSTIC)
+    s = score_drums(d, DrumLabels(kicks, snares, []), 32.0, lag_search=ACOUSTIC_FFPLAY)
     assert s.kick_r50 > 0.7 and s.on_drum > 0.85 and s.as_dict()["lagSource"] == ESTIMATED
 
 
@@ -110,12 +112,59 @@ def test_a_periodic_tie_goes_to_the_calibrated_prior(prior_ms: float) -> None:
     assert est.runner_up_ms is not None and abs(est.runner_up_ms - est.lag_ms) >= 200
 
 
+def test_each_box_player_has_its_own_prior() -> None:
+    # Same window, the typical lag of the player that ran as the tie-break (lag.py has the
+    # box evidence): the ALSA player starts ~50 ms sooner than ffplay did.
+    assert acoustic_search("alsa") is ACOUSTIC_ALSA and ACOUSTIC_ALSA.prior_ms == 220.0
+    assert acoustic_search("ffplay") is ACOUSTIC_FFPLAY and ACOUSTIC_FFPLAY.prior_ms == 270.0
+    assert (ACOUSTIC_ALSA.lo_ms, ACOUSTIC_ALSA.hi_ms) == (ACOUSTIC_FFPLAY.lo_ms, ACOUSTIC_FFPLAY.hi_ms)
+
+
+@pytest.mark.parametrize("player", ["", "pulse", "ALSA", None])
+def test_an_unknown_player_raises(player: object) -> None:
+    with pytest.raises(ValueError, match="unknown audio player"):
+        acoustic_search(player)  # type: ignore[arg-type]
+
+
+def test_a_periodic_tie_goes_to_the_prior_of_the_player_that_ran() -> None:
+    # Kicks every 0.2 s and nothing else: lags 160 and 360 ms match equally, and the midpoint
+    # (260) lies between the two priors, so the player decides. A fast ALSA start (160 ms)
+    # resolves to itself under ALSA's prior; ffplay's prior would have taken the alias.
+    kicks = [1.0 + 0.2 * i for i in range(150)]
+    d = detect(kicks, 0.160, jitter_s=0.004, seed=5)
+    alsa = estimate_lag(d, kicks, 32.0, search=acoustic_search("alsa"), tol_s=TOL)
+    ffplay = estimate_lag(d, kicks, 32.0, search=acoustic_search("ffplay"), tol_s=TOL)
+    assert alsa.ambiguous and ffplay.ambiguous
+    assert abs(alsa.lag_ms - 160) < 10 and abs(ffplay.lag_ms - 360) < 10
+    assert alsa.as_dict()["lagPriorMs"] == 220.0 and ffplay.as_dict()["lagPriorMs"] == 270.0
+
+
+def test_score_device_run_searches_with_the_window_it_is_given() -> None:
+    # The box passes acoustic_search(<the player its capture records>) when its audio start
+    # wasn't measured; the drum score says which prior it used. The default stays ffplay's.
+    kicks = [1.0 + 0.2 * i for i in range(150)]
+    start = 1_700_000_000_000.0
+    data = TestData(
+        duration=32_000.0,
+        start_time=start,
+        transients=[TransientEvent(start + t * 1000.0, "onset", s) for t, s in
+                    detect(kicks, 0.160, jitter_s=0.004, seed=5)],
+    )
+    gt = GroundTruth("test", 32_000.0, [], drums=DrumLabels(kicks, [], []))
+    alsa = score_device_run(data, start, gt, lag_search=acoustic_search("alsa")).drums
+    default = score_device_run(data, start, gt).drums
+    assert alsa is not None and default is not None
+    assert alsa["lagSource"] == ESTIMATED and alsa["lagPriorMs"] == 220.0
+    assert abs(alsa["lagMs"] - 160) < 10
+    assert default["lagPriorMs"] == 270.0 and abs(default["lagMs"] - 360) < 10
+
+
 def test_a_fill_breaks_the_periodic_tie() -> None:
     # The same idea with real structure (fills every fourth bar): the true lag wins clearly.
     kicks, snares = groove()
     ref = sorted(kicks + snares)
     d = detect(ref, 0.420, jitter_s=0.006, keep=0.9)
-    est = estimate_lag(d, ref, 32.0, search=ACOUSTIC, tol_s=TOL)
+    est = estimate_lag(d, ref, 32.0, search=ACOUSTIC_FFPLAY, tol_s=TOL)
     assert not est.ambiguous and abs(est.lag_ms - 420) < 10
     assert est.runner_up_matches is not None and est.runner_up_matches < est.matches
 
@@ -132,7 +181,7 @@ def test_too_few_matches_falls_back_explicitly(caplog: pytest.LogCaptureFixture)
     kicks, snares = groove()
     ref = sorted(kicks + snares)
     with caplog.at_level(logging.WARNING, logger="blinky_scoring.lag"):
-        est = estimate_lag([(5.0, 1.0)], ref, 32.0, search=ACOUSTIC, tol_s=TOL,
+        est = estimate_lag([(5.0, 1.0)], ref, 32.0, search=ACOUSTIC_FFPLAY, tol_s=TOL,
                            fallback_ms=123.0)
     assert est.source == FALLBACK and est.lag_ms == 123.0 and est.matches == 0
     assert est.note and "fallback" in est.note
@@ -147,12 +196,12 @@ def test_a_measured_lag_is_used_and_cross_checked(caplog: pytest.LogCaptureFixtu
     kicks, snares = groove()
     ref = sorted(kicks + snares)
     d = detect(ref, 0.300, jitter_s=0.005)
-    est = estimate_lag(d, ref, 32.0, search=ACOUSTIC, tol_s=TOL, measured_ms=300.0)
+    est = estimate_lag(d, ref, 32.0, search=ACOUSTIC_FFPLAY, tol_s=TOL, measured_ms=300.0)
     assert est.source == MEASURED and est.lag_ms == 300.0 and est.note is None
     assert est.check_ms is not None and abs(est.check_ms - 300) < 10
     # A wrong measurement is still used (it's the caller's), but the disagreement is reported.
     with caplog.at_level(logging.WARNING, logger="blinky_scoring.lag"):
-        bad = estimate_lag(d, ref, 32.0, search=ACOUSTIC, tol_s=TOL, measured_ms=230.0)
+        bad = estimate_lag(d, ref, 32.0, search=ACOUSTIC_FFPLAY, tol_s=TOL, measured_ms=230.0)
     assert bad.source == MEASURED and bad.lag_ms == 230.0
     assert bad.note and "disagrees" in bad.note and caplog.records
 
