@@ -47,9 +47,24 @@
   .mono { font-family: ui-monospace, Menlo, monospace; }
   .k { color: var(--kick); } .s { color: var(--snare); } .ok { color: var(--rev); } .bad { color: var(--err); } .dim { color: var(--dim); }
   a.link { color: var(--snare); cursor: pointer; text-decoration: underline; }
-  #help { padding: 4px 14px 20px; color: var(--dim); }
-  #help table { border-collapse: collapse; }
-  #help td { padding: 1px 12px 1px 0; vertical-align: top; }
+  .modal-bg { position: fixed; inset: 0; background: #000a; display: none; z-index: 30; overflow: auto; padding: 32px 16px; }
+  .modal-bg.open { display: flex; align-items: flex-start; justify-content: center; }
+  .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-width: 900px; width: 100%; padding: 14px 20px 18px; box-shadow: 0 12px 40px #000c; }
+  .modal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .modal-head h2 { margin: 0; font-size: 17px; }
+  .modal h3 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .modal p, .modal li { line-height: 1.5; }
+  .modal ol { margin: 4px 0; padding-left: 22px; }
+  .modal table { border-collapse: collapse; }
+  .modal td { padding: 3px 14px 3px 0; vertical-align: top; }
+  .lanes td:first-child { white-space: nowrap; font-weight: 600; }
+  .setting { display: grid; grid-template-columns: 210px 1fr; gap: 2px 14px; padding: 8px 0; border-top: 1px solid var(--line); align-items: start; }
+  .setting:first-of-type { border-top: 0; }
+  .setting .ctl { display: flex; gap: 8px; align-items: center; }
+  .setting .desc { color: var(--dim); font-size: 12px; line-height: 1.45; }
+  #help-keys { color: var(--dim); font-size: 12px; }
+  #help-keys td { padding: 1px 12px 1px 0; }
+  .chip { padding: 2px 9px; border-radius: 10px; font-size: 12px; cursor: pointer; }
   kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: var(--panel2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; color: var(--text); }
   #tracks { position: fixed; inset: 40px 6% auto 6%; max-height: calc(100vh - 80px); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 40px #000a; padding: 12px 16px; display: none; z-index: 10; }
   #tracks.open { display: block; }
@@ -67,6 +82,8 @@
 <header>
   <h1>Drum Reviewer</h1>
   <button id="btn-tracks" title="Track list (T)">Tracks</button>
+  <button id="btn-settings" title="Playback, label clicks, display and editing options">⚙ Settings</button>
+  <button id="btn-help" title="How this page works (?)">? Help</button>
   <span id="trackname">no track</span>
   <span id="seedbadge" class="badge" style="display:none"></span>
   <span id="counts" class="dim"></span>
@@ -82,22 +99,7 @@
   <div class="grp">
     <button id="btn-play" title="Play/pause (Space)">Play</button>
     <span id="time" class="mono">0:00.000</span>
-    <label title="Playback rate (1/2/3). Pitch drops with rate (sample-accurate click sync).">rate
-      <select id="rate"><option value="1">1.0</option><option value="0.75">0.75</option><option value="0.5">0.5</option></select></label>
-    <label title="Loop the selected region, or the visible range if none (L)"><input type="checkbox" id="loop"> loop</label>
-    <label title="Follow the playhead"><input type="checkbox" id="follow" checked> follow</label>
-  </div>
-  <div class="grp">
-    <label class="k" title="Click at every kick (Shift+K)"><input type="checkbox" id="click-kick" checked> kick clicks</label>
-    <label class="s" title="Click at every snare (Shift+S)"><input type="checkbox" id="click-snare" checked> snare clicks</label>
-    <label title="Click level">clicks <input type="range" id="click-vol" min="0" max="1" step="0.05" value="0.5" style="width:70px"></label>
-    <label title="Music level">music <input type="range" id="music-vol" min="0" max="1" step="0.05" value="0.8" style="width:70px"></label>
-    <label title="Solo a band (B)">band <select id="band"><option value="full">full</option><option value="low">low (kick)</option><option value="mid">mid (snare)</option></select></label>
-  </div>
-  <div class="grp">
-    <label title="Snap new hits to the nearest onset-strength peak within ±25 ms"><input type="checkbox" id="snap-add" checked> snap on add</label>
-    <label title="What a snap aligns to. attack: the 150 Hz–5 kHz onset-strength peak for both classes (the transient; low-band energy builds up a few ms after a kick's attack). lane: each class's own lane band.">to <select id="snap-ref"><option value="attack">attack (150 Hz–5 kHz)</option><option value="lane">own lane band</option></select></label>
-    <label title="Ghost ticks from a reference label set, at the bottom of each lane">ref <select id="ref"><option value="">none</option><option value="drums_adtof">ADTOF</option><option value="kick_weighted">band (old)</option></select></label>
+    <span id="clicks-chip" class="chip badge" title="Label clicks: a low click at every kick label and a high click at every snare label during playback. Click to change in Settings."></span>
   </div>
   <div class="grp">
     <button id="btn-zout" title="Zoom out (-)">−</button>
@@ -116,18 +118,64 @@
   <div class="box"><h3>Offset check (label → snap target, ±25 ms)</h3><div id="info-offset" class="mono">—</div></div>
   <div class="box"><h3>Checks</h3><div id="info-checks" class="mono">—</div></div>
 </div>
-<div id="help">
-  <table>
+<div id="settings" class="modal-bg"><div class="modal" role="dialog" aria-label="Settings">
+  <div class="modal-head"><h2>Settings</h2><span class="dim">remembered in this browser</span><span class="spacer"></span><button id="btn-settings-close">Close (Esc)</button></div>
+  <h3>Label clicks</h3>
+    <div class="setting"><div class="ctl"><label class="k"><input type="checkbox" id="click-kick"> kick clicks</label></div><div class="desc"><strong style="color:var(--text)">Kick clicks.</strong> A low click at every kick label during playback. If the click doesn't land on the kick drum, the label is off. Off by default. Shortcut <kbd>Shift+K</kbd>.</div></div>
+    <div class="setting"><div class="ctl"><label class="s"><input type="checkbox" id="click-snare"> snare clicks</label></div><div class="desc"><strong style="color:var(--text)">Snare clicks.</strong> A high click at every snare label. Off by default. Shortcut <kbd>Shift+S</kbd>.</div></div>
+    <div class="setting"><div class="ctl"><label>clicks <input type="range" id="click-vol" min="0" max="1" step="0.05" value="0.5" style="width:90px"></label><label>music <input type="range" id="music-vol" min="0" max="1" step="0.05" value="0.8" style="width:90px"></label></div><div class="desc"><strong style="color:var(--text)">Volumes.</strong> The click level and the music level.</div></div>
+  <h3>Playback</h3>
+    <div class="setting"><div class="ctl"><select id="rate"><option value="1">1.0×</option><option value="0.75">0.75×</option><option value="0.5">0.5×</option></select></div><div class="desc"><strong style="color:var(--text)">Speed.</strong> Slow the music down to hear timing. The clicks stay exactly on their labels; the pitch drops. Shortcuts <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd>.</div></div>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="loop"> loop</label></div><div class="desc"><strong style="color:var(--text)">Loop.</strong> Repeat the selected region, or what's on screen if nothing is selected. Shortcut <kbd>L</kbd>.</div></div>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="follow" checked> follow the playhead</label></div><div class="desc"><strong style="color:var(--text)">Follow.</strong> Scroll the view along with playback.</div></div>
+    <div class="setting"><div class="ctl"><select id="band"><option value="full">full mix</option><option value="low">low band (kick, 30–150 Hz)</option><option value="mid">mid band (snare, 150 Hz–5 kHz)</option></select></div><div class="desc"><strong style="color:var(--text)">Band solo.</strong> Play only the kick or snare frequency band, to hear one drum under its clicks. Shortcut <kbd>B</kbd> cycles.</div></div>
+  <h3>Editing</h3>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="snap-add" checked> snap new hits</label></div><div class="desc"><strong style="color:var(--text)">Snap on add.</strong> A hit you add moves to the nearest strong attack within ±25 ms. <kbd>N</kbd> snaps selected hits.</div></div>
+    <div class="setting"><div class="ctl"><select id="snap-ref"><option value="attack">attack (150 Hz–5 kHz)</option><option value="lane">own lane band</option></select></div><div class="desc"><strong style="color:var(--text)">Snap target.</strong> What snapping aligns to. "attack" is the transient both drums share; a kick's low-frequency energy builds up a few ms after it.</div></div>
+  <h3>Display</h3>
+    <div class="setting"><div class="ctl"><select id="ref"><option value="">none</option><option value="drums_adtof">ADTOF</option><option value="kick_weighted">band (old)</option></select></div><div class="desc"><strong style="color:var(--text)">Reference ticks.</strong> Faint ghost ticks at the bottom of each lane from another label set, for comparison. They're not editable.</div></div>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="show-hats"> show ADTOF hi-hats</label></div><div class="desc"><strong style="color:var(--text)">Hi-hat ticks.</strong> Faint read-only marks along the top of the snare lane where ADTOF heard hi-hats. Not labels you're reviewing. Off by default.</div></div>
+</div></div>
+<div id="help" class="modal-bg"><div class="modal" role="dialog" aria-label="Help">
+  <div class="modal-head"><h2>How this page works</h2><span class="spacer"></span><button id="btn-help-close">Got it (Esc)</button></div>
+  <p>You're checking the <span class="k">kick</span> and <span class="s">snare</span> labels of one track at a time. Each track starts with labels from ADTOF, an automatic drum transcriber. Fix what's wrong, mark each screen reviewed, and save. The scorer uses your labels once a track is 100% reviewed and saved.</p>
+  <h3>Reviewing a track</h3>
+  <ol>
+    <li><strong>Pick a track</strong> with <em>Tracks</em> (or <kbd>T</kbd>). The tracks most likely to be wrong are listed first.</li>
+    <li><strong>Play</strong> (<kbd>Space</kbd>). To hear where the labels are, turn on <em>label clicks</em> in <em>⚙ Settings</em>: a low click at each kick label, a high click at each snare label. A click that doesn't sit on its drum is a bad label. Slowing down (<kbd>2</kbd>, <kbd>3</kbd>) makes small offsets easier to hear.</li>
+    <li><strong>Fix</strong> what's wrong:
+      <ul>
+        <li><em>add:</em> double-click in the kick or snare lane, or press <kbd>K</kbd> / <kbd>S</kbd> at the mouse;</li>
+        <li><em>move:</em> drag a hit;</li>
+        <li><em>delete:</em> select it and press <kbd>X</kbd>;</li>
+        <li><em>swap kick ↔ snare:</em> select it and press <kbd>C</kbd>;</li>
+        <li><em>nudge:</em> <kbd>←</kbd> / <kbd>→</kbd> by 1 ms.</li>
+      </ul></li>
+    <li><strong>Mark the screen reviewed</strong> with <em>Reviewed → next</em> (<kbd>Enter</kbd>). It moves on one screen. Green in the bottom lane and the overview shows what you've covered; <kbd>U</kbd> jumps to anything skipped.</li>
+    <li><strong>Save</strong> (<kbd>Ctrl+S</kbd>) when the track is 100% reviewed. Until then every edit autosaves as a draft, so you can stop anytime.</li>
+  </ol>
+  <h3>What you're looking at</h3>
+  <table class="lanes">
+    <tr><td>overview</td><td>The whole track. Green is reviewed; the box is the current view. Click to jump.</td></tr>
+    <tr><td>spectrogram</td><td>Frequency over time, 30 Hz–12 kHz. Drums show as vertical streaks.</td></tr>
+    <tr><td>waveform</td><td>The full mix. Every label is drawn through it as a line.</td></tr>
+    <tr><td class="k">kick lane</td><td>The 30–150 Hz band: the fill is its loudness, the line its onset strength. Peaks in the line are likely kicks. Kick labels are the markers.</td></tr>
+    <tr><td class="s">snare lane</td><td>The 150 Hz–5 kHz band, drawn the same way, with the snare labels.</td></tr>
+    <tr><td>reviewed</td><td>Green where you've marked reviewed, red where you haven't.</td></tr>
+  </table>
+  <p class="dim">The panels under the lanes show the selection, an <em>offset check</em> (labels consistently early or late against the attack), and <em>checks</em> (two same-drum hits closer than 20 ms; <kbd>I</kbd> jumps to the next).</p>
+  <h3>Mouse and keyboard</h3>
+  <table id="help-keys">
     <tr><td><kbd>Space</kbd> play / pause</td><td><kbd>K</kbd> / <kbd>S</kbd> add kick / snare (at mouse when paused, else playhead)</td><td><kbd>R</kbd> mark region (or view) reviewed, <kbd>Shift+R</kbd> unmark</td></tr>
     <tr><td><kbd>L</kbd> loop region (or view)</td><td><kbd>N</kbd> snap selected to onset peak (±25 ms)</td><td><kbd>Enter</kbd> mark view reviewed + next screen</td></tr>
     <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> rate 1.0 / 0.75 / 0.5</td><td><kbd>C</kbd> change class kick ↔ snare</td><td><kbd>PgDn</kbd> / <kbd>PgUp</kbd> next / previous screen</td></tr>
     <tr><td><kbd>Shift+K</kbd> / <kbd>Shift+S</kbd> kick / snare clicks</td><td><kbd>X</kbd> / <kbd>Del</kbd> delete selected</td><td><kbd>U</kbd> next unreviewed gap, <kbd>I</kbd> next check issue</td></tr>
     <tr><td><kbd>B</kbd> band solo full → low → mid</td><td><kbd>←</kbd> <kbd>→</kbd> nudge 1 ms, <kbd>Shift</kbd> 5 ms (no selection: pan)</td><td><kbd>+</kbd> / <kbd>−</kbd> zoom, <kbd>0</kbd> whole track, <kbd>Z</kbd> 1 s zoom ↔ back</td></tr>
-    <tr><td><kbd>T</kbd> track list, <kbd>?</kbd> this help</td><td><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> select next / previous hit</td><td><kbd>Home</kbd> / <kbd>End</kbd> start / end</td></tr>
+    <tr><td><kbd>T</kbd> track list, <kbd>?</kbd> this help, <kbd>Esc</kbd> close</td><td><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> select next / previous hit</td><td><kbd>Home</kbd> / <kbd>End</kbd> start / end</td></tr>
     <tr><td><kbd>Ctrl+S</kbd> save</td><td><kbd>Ctrl+A</kbd> select hits in region (or view), <kbd>Esc</kbd> clear</td><td><kbd>Ctrl+Z</kbd> undo, <kbd>Ctrl+Shift+Z</kbd> / <kbd>Ctrl+Y</kbd> redo</td></tr>
     <tr><td colspan="3">Mouse: click = cursor / select a hit (<kbd>Shift</kbd> adds) · drag a hit = move · drag empty space = region (selects its hits; in a lane, that lane's class) · double-click in the kick or snare lane = add · wheel = zoom · <kbd>Shift</kbd>+wheel or sideways scroll = pan · overview = jump.</td></tr>
   </table>
-</div>
+</div></div>
 <div id="tracks">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
     <strong>Tracks</strong><span class="dim" id="tracks-sum"></span><span class="spacer"></span><button id="btn-tracks-close">Close (Esc)</button>
@@ -388,7 +436,7 @@ function drawMain() {
     const b = S.ana.bands;
     g.fillText(`spectrogram ${Math.round(S.ana.spec.fmin)} Hz – ${(S.ana.spec.fmax / 1000).toFixed(0)} kHz (log)`, 4, LANE.spec.y + 10);
     g.fillStyle = COL.kick; g.fillText(`KICK  ${b.low[0]}–${b.low[1]} Hz  (fill: envelope, line: onset strength)`, 4, LANE.kick.y + 10);
-    g.fillStyle = COL.snare; g.fillText(`SNARE  ${b.mid[0]}–${b.mid[1] / 1000} kHz   · hihat ticks (read-only) on top`, 4, LANE.snare.y + 10);
+    g.fillStyle = COL.snare; g.fillText(`SNARE  ${b.mid[0]}–${b.mid[1] / 1000} kHz${$("show-hats").checked ? "   · hihat ticks (read-only) on top" : ""}`, 4, LANE.snare.y + 10);
   }
   g.fillStyle = "#8a90a0"; g.fillText("reviewed", W - 50, LANE.rev.y + 10);
 }
@@ -465,7 +513,7 @@ function drawReviewed(g) {
 function drawRefs(g) {
   const refs = S.meta && S.meta.references || {}, which = $("ref").value;
   const t0 = S.view.start - 0.01, t1 = S.view.start + S.view.dur + 0.01;
-  if (refs.drums_adtof || refs.kick_weighted) {
+  if ($("show-hats").checked && (refs.drums_adtof || refs.kick_weighted)) {
     const hh = (refs.drums_adtof || refs.kick_weighted).hihat || [];
     g.fillStyle = "rgba(154,160,173,0.45)";
     for (const t of hh) if (t >= t0 && t <= t1) g.fillRect(Math.round(t2x(t)), LANE.snare.y + 12, 1, 7);
@@ -906,10 +954,12 @@ function addPoint() {
   return S.cursor;
 }
 function pageBy(f) { setView(S.view.start + f * S.view.dur * 0.9); S.cursor = S.view.start; restartIfPlaying(S.view.start); updateInfo(); }
-function toggleChk(id, label) { const c = $(id); c.checked = !c.checked; toast(`${label} ${c.checked ? "on" : "off"}`); }
+function toggleChk(id, label) { const c = $(id); c.checked = !c.checked; toast(`${label} ${c.checked ? "on" : "off"}`); savePrefs(); updateClicksChip(); }
 document.addEventListener("keydown", (e) => {
   const tag = e.target.tagName;
   if (tag === "INPUT" && e.target.type !== "checkbox" && e.target.type !== "range") return;
+  if ($("help").classList.contains("open")) { if (e.key === "Escape" || e.key === "?") { e.preventDefault(); closeModal("help"); } return; }
+  if ($("settings").classList.contains("open")) { if (e.key === "Escape") { e.preventDefault(); closeModal("settings"); } return; }
   if ($("tracks").classList.contains("open")) { if (e.key === "Escape" || e.key === "t" || e.key === "T") closeTracks(); return; }
   const k = e.key, ctrl = e.ctrlKey || e.metaKey, lk = k.length === 1 ? k.toLowerCase() : k;
   if (ctrl) {
@@ -923,7 +973,7 @@ document.addEventListener("keydown", (e) => {
   if (e.altKey) return;
   if (tag === "SELECT" || tag === "BUTTON" || tag === "INPUT") e.target.blur();
   if (lk === "t") return openTracks();
-  if (lk === "?") { $("help").scrollIntoView({ behavior: "smooth" }); return; }
+  if (lk === "?") { openModal("help"); return; }
   if (!S.duration) return;
   let handled = true;
   switch (lk) {
@@ -961,7 +1011,7 @@ document.addEventListener("keydown", (e) => {
     case "End": setView(S.duration); S.cursor = Math.max(0, S.duration - S.view.dur); break;
     default: handled = false;
   }
-  if (handled) e.preventDefault();
+  if (handled) { e.preventDefault(); savePrefs(); }
   if (!P.playing) $("time").textContent = fmtTime(S.cursor);
   drawOverlay();
 });
@@ -975,6 +1025,32 @@ $("btn-next").onclick = () => document.dispatchEvent(new KeyboardEvent("keydown"
 for (const id of ["rate", "loop", "band"]) $(id).addEventListener("change", (e) => { e.target.blur(); restartIfPlaying(); });
 $("ref").addEventListener("change", (e) => { e.target.blur(); drawMain(); });
 $("snap-ref").addEventListener("change", (e) => { e.target.blur(); updateInfo(); });
+$("show-hats").addEventListener("change", () => drawMain());
+// ---------------------------------------------------------------- settings, help, remembered prefs
+const PREF_IDS = ["rate", "follow", "click-kick", "click-snare", "click-vol", "music-vol", "band", "snap-add", "snap-ref", "ref", "show-hats"];
+const PREF_KEY = "drumReviewer.prefs.v1", HELP_KEY = "drumReviewer.helpSeen.v1";
+function loadPrefs() {
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}") || {}; } catch (e) { p = {}; }
+  for (const id of PREF_IDS) { if (!(id in p)) continue; const el = $(id); if (el.type === "checkbox") el.checked = !!p[id]; else el.value = p[id]; }
+}
+function savePrefs() {
+  const p = {};
+  for (const id of PREF_IDS) { const el = $(id); p[id] = el.type === "checkbox" ? el.checked : el.value; }
+  try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (e) { /* private window: prefs just aren't remembered */ }
+}
+function updateClicksChip() {
+  const k = $("click-kick").checked, sn = $("click-snare").checked;
+  $("clicks-chip").textContent = k && sn ? "label clicks: kick + snare" : k ? "label clicks: kick" : sn ? "label clicks: snare" : "label clicks: off";
+}
+function openModal(id) { $(id).classList.add("open"); }
+function closeModal(id) { $(id).classList.remove("open"); if (id === "help") { try { localStorage.setItem(HELP_KEY, "1"); } catch (e) { /* ignore */ } } }
+$("btn-settings").onclick = () => openModal("settings"); $("btn-settings-close").onclick = () => closeModal("settings");
+$("btn-help").onclick = () => openModal("help"); $("btn-help-close").onclick = () => closeModal("help");
+$("clicks-chip").onclick = () => openModal("settings");
+for (const id of ["settings", "help"]) $(id).addEventListener("mousedown", (e) => { if (e.target === $(id)) closeModal(id); });
+for (const id of PREF_IDS) $(id).addEventListener("change", () => { savePrefs(); updateClicksChip(); });
+loadPrefs(); updateClicksChip();
 $("click-vol").addEventListener("input", (e) => clickGain.gain.value = +e.target.value);
 $("music-vol").addEventListener("input", (e) => musicGain.gain.value = +e.target.value);
 clickGain.gain.value = +$("click-vol").value; musicGain.gain.value = +$("music-vol").value;
@@ -985,6 +1061,9 @@ resize();
 loadTracks().then(() => {
   const h = decodeURIComponent(location.hash.slice(1));
   if (h && S.tracks.some(t => t.stem === h)) openTrack(h); else openTracks();
+  let seen = null;
+  try { seen = localStorage.getItem(HELP_KEY); } catch (e) { seen = null; }
+  if (!seen) openModal("help");
 }).catch(e => toast(`could not list tracks: ${e.message}`, 8000));
 </script>
 </body>
