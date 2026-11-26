@@ -1,0 +1,38 @@
+{
+  "purpose": "Review priority for tools/drum-reviewer: bars where mix-level ADTOF labels are most likely wrong, so humans fix the bad sections first. Not ground truth; the scorer never reads it.",
+  "generator": {
+    "script": "scripts/drum_suspect.py",
+    "features_script": "scripts/drum_suspect_features.py",
+    "inputs": [
+      "edm/drums_adtof (mix-level ADTOF)",
+      "edm/drums_adtof_stem (ADTOF on the HT-Demucs drum stem)",
+      "per-track features from the Spark gpu_task below"
+    ]
+  },
+  "features": {
+    "spark_job": "0c7ef79058ed4688a57ea871d93865b5",
+    "job_type": "gpu_task",
+    "runtime": "torch-cu130",
+    "code_bundle_sha256": "ebccd4ecd574402a32442b0ec80bb7afe7222dcafb5bcfbfa117003ae1903ea4",
+    "librosa": "1.0.0",
+    "outputs": "blinky/seedexp-20261125/gpu/0c7ef79058ed4688a57ea871d93865b5/feats/<stem>.npz",
+    "drum_stems": "the htdemucs separate jobs listed in edm/drums_adtof_stem/PROVENANCE.json",
+    "note": "band envelopes have a 44-sample hop (0.9977 ms at 44.1 kHz), recorded as os_hop_s"
+  },
+  "evaluation_2026-11-26": {
+    "ground_truth": "dnb-energetic-breakbeat owner draft: 0 s of reviewed ranges, so only the 32 hits the owner added (5 kicks, 27 snares) are known corrections; scripts/drum_suspect_eval.py",
+    "tiers": {
+      "high": "17/32 corrections in 21% of the track (2.5x random)",
+      "high+medium": "27/32 in 40% (2.1x)",
+      "any tier": "32/32 in 64%"
+    },
+    "signals_alone_at_budget": {
+      "mix/stem disagreement": "9/32 at 10%, 18/32 at 21%, 27/32 at 31%",
+      "pattern missing (P>=0.5, no label, attack present)": "10/32 at 10%, 17/32 at 21%, 24/32 at 31%",
+      "filter (drum-stem centroid/rolloff z>3)": "6/32 at 10%, 6/32 at 21%, 7/32 at 31%",
+      "random": "3.2/32 at 10%, 6.7/32 at 21%, 9.9/32 at 31%"
+    },
+    "weights": "disagreement and pattern-missing weighted equally (independent evidence; disagreement is partly circular here because ADTOF on the stem found 22 of the 27 snares); unexpected and filter only break ties",
+    "caveat": "One track, 32 hits, no reviewed negatives. Re-check once reviewed ranges exist."
+  }
+}
