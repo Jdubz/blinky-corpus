@@ -146,7 +146,7 @@
     <li><strong>Fix</strong> what's wrong:
       <ul>
         <li><em>add:</em> double-click in the kick or snare lane, or press <kbd>K</kbd> / <kbd>S</kbd> at the mouse;</li>
-        <li><em>move:</em> drag a hit;</li>
+        <li><em>move:</em> hover a marker until the pointer turns into a hand and the marker lights up, then drag. In the kick lane you grab kicks, in the snare lane snares, in the waveform either. Dragging empty space selects a region instead;</li>
         <li><em>delete:</em> select it and press <kbd>X</kbd>;</li>
         <li><em>swap kick ↔ snare:</em> select it and press <kbd>C</kbd>;</li>
         <li><em>nudge:</em> <kbd>←</kbd> / <kbd>→</kbd> by 1 ms.</li>
@@ -315,7 +315,7 @@ self.onmessage = (ev) => {
 "use strict";
 // ---------------------------------------------------------------- constants & state
 const SNAP_WIN = 0.025;        // snap search: +-25 ms
-const HIT_PX = 6;              // marker hit radius
+const HIT_PX = 10;             // marker hit radius (CSS px): forgiving, with a grab cursor and highlight on hover
 const MIN_VIEW = 0.2, DEFAULT_VIEW = 6;
 const DUP_WIN = 0.020;         // same-class hits closer than this are flagged
 const LANES = [
@@ -334,7 +334,7 @@ const S = {
   onsets: [], reviewed: [], sel: new Set(), nextId: 1,
   undo: [], redo: [],
   view: { start: 0, dur: DEFAULT_VIEW }, prevZoom: null,
-  cursor: 0, region: null, hover: null, drag: null, flash: null,
+  cursor: 0, region: null, hover: null, hoverHit: null, drag: null, flash: null,
   dirty: false, startedFrom: null, draftTimer: null, lastDraft: null, lastSnap: null,
   issueIdx: -1,
 };
@@ -540,7 +540,15 @@ function playPos() { return P.playing ? posAt(actx.currentTime - (actx.outputLat
 function drawOverlay() {
   const g = cvOv.getContext("2d"); g.setTransform(DPR, 0, 0, DPR, 0, 0); g.clearRect(0, 0, W, STACK_H);
   if (!S.duration) return;
-  if (S.hover && !S.drag) { g.fillStyle = "rgba(255,255,255,0.25)"; g.fillRect(Math.round(S.hover.x), LANE.spec.y, 1, STACK_H - LANE.spec.y); g.font = "10px ui-monospace, monospace"; g.fillStyle = "#cfd3dc"; g.fillText(fmtTime(S.hover.t), S.hover.x + 4, LANE.wave.y + 10); }
+  if (S.hoverHit && !S.drag) {
+    const o = S.hoverHit, L = LANE[o.type], x = Math.round(t2x(o.time)) + 0.5;
+    g.strokeStyle = "#ffffff"; g.globalAlpha = 0.9; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(x, L.y + 12); g.lineTo(x, L.y + L.h - 10); g.stroke();
+    g.beginPath(); g.moveTo(x - 7, L.y + 10); g.lineTo(x + 7, L.y + 10); g.lineTo(x, L.y + 22); g.closePath(); g.stroke();
+    g.globalAlpha = 1; g.lineWidth = 1;
+    g.font = "10px system-ui, sans-serif"; g.fillStyle = "#ffffff"; g.fillText(`drag to move this ${o.type}`, x + 9, L.y + L.h - 14);
+  }
+  if (S.hover && !S.drag && !S.hoverHit) { g.fillStyle = "rgba(255,255,255,0.25)"; g.fillRect(Math.round(S.hover.x), LANE.spec.y, 1, STACK_H - LANE.spec.y); g.font = "10px ui-monospace, monospace"; g.fillStyle = "#cfd3dc"; g.fillText(fmtTime(S.hover.t), S.hover.x + 4, LANE.wave.y + 10); }
   { const x = Math.round(t2x(S.cursor)) + 0.5; g.strokeStyle = COL.cursor; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, STACK_H); g.stroke(); g.setLineDash([]); }
   if (P.playing) { const x = Math.round(t2x(playPos())) + 0.5; g.strokeStyle = COL.play; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, STACK_H); g.stroke(); g.lineWidth = 1; }
   if (S.flash && performance.now() < S.flash.until) { const x = t2x(S.flash.t); g.font = "bold 11px ui-monospace, monospace"; g.fillStyle = "#000c"; const w = g.measureText(S.flash.text).width; g.fillRect(x + 6, S.flash.y - 11, w + 6, 15); g.fillStyle = "#fff"; g.fillText(S.flash.text, x + 9, S.flash.y); }
@@ -912,6 +920,8 @@ window.addEventListener("mousemove", (e) => {
   const { x, y } = evPos(e), inside = x >= 0 && x <= W && y >= 0 && y <= STACK_H;
   S.hover = inside ? { x, t: x2t(x), lane: laneAt(y) } : null;
   const d = S.drag;
+  if (!d) { const h = inside ? hitMarker(x, laneAt(y)) : null; S.hoverHit = h; cvOv.style.cursor = h ? "grab" : "crosshair"; }
+  else if (d.kind === "move") cvOv.style.cursor = "grabbing";
   if (d && d.kind === "move") {
     if (!d.moved && Math.abs(x - d.x0) > 2) { d.moved = true; checkpoint(); }
     if (d.moved) { const dt = (x - d.x0) * S.view.dur / W; for (const o of S.onsets) if (d.orig.has(o.id)) o.time = clamp(d.orig.get(o.id) + dt, 0, S.duration); drawMain(); }
@@ -922,6 +932,7 @@ window.addEventListener("mousemove", (e) => {
 });
 window.addEventListener("mouseup", (e) => {
   const d = S.drag; if (!d) return; S.drag = null;
+  cvOv.style.cursor = S.hoverHit ? "grab" : "crosshair";
   if (d.kind === "move") {
     if (d.moved) { edited(); const o = d.hit; S.lastSnap = `moved to ${o.time.toFixed(4)} s (N to snap)`; }
     else { S.cursor = d.hit.time; if (P.playing) restartIfPlaying(d.hit.time - 0.5); }
@@ -937,7 +948,7 @@ cvOv.addEventListener("dblclick", (e) => {
   const { x, y } = evPos(e), lane = laneAt(y);
   if (lane === "kick" || lane === "snare") addOnset(x2t(x), lane);
 });
-cvOv.addEventListener("mouseleave", () => { S.hover = null; drawOverlay(); });
+cvOv.addEventListener("mouseleave", () => { S.hover = null; S.hoverHit = null; drawOverlay(); });
 cvOv.addEventListener("wheel", (e) => {
   if (!S.duration) return; e.preventDefault();
   const { x } = evPos(e);
