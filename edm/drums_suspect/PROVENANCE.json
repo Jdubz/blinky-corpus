@@ -33,6 +33,17 @@
       "random": "3.2/32 at 10%, 6.7/32 at 21%, 9.9/32 at 31%"
     },
     "weights": "disagreement and pattern-missing weighted equally (independent evidence; disagreement is partly circular here because ADTOF on the stem found 22 of the 27 snares); unexpected and filter only break ties",
-    "caveat": "One track, 32 hits, no reviewed negatives. Re-check once reviewed ranges exist."
+    "caveat": "One track, 32 hits, no reviewed negatives. Re-check once reviewed ranges exist.",
+    "expected_hits": "24/32 of the owner's added hits (5 kicks, 27 snares) are within +-30 ms of a same-class expected-hit marker (22 within +-10 ms); the track has 57 markers, 48 at a measured attack. The other 8 had P<0.5 or too weak an attack."
+  },
+  "schema": 2,
+  "schema_history": {
+    "1": "per-bar evidence counts, score, rank, tier, ranges (2026-11-26, #15)",
+    "2": "adds per-bar `expected`: each expected-but-missing hit (P>=0.5, no mix label, attack present) as {time, type, p, attack, at}; `at` is \"attack\" when the time is the strongest 150 Hz-5 kHz onset-strength peak of the mix or drum stem within +-min(20 ms, 0.4 slot) of the slot (a local maximum at least the attack threshold), else \"grid\" (the slot's grid time). Every other field is unchanged."
+  },
+  "regenerated_2026-11-26": {
+    "how": "scripts/drum_suspect.py on the build host, from the same Spark feature files (fetched from the object store with blinky-server's Spark client); one-shot CPU run",
+    "check": "every map is identical to schema 1 apart from `schema` and the added `expected` lists (scores, ranks, tiers and ranges unchanged); 1004 expected hits over the 18 tracks, one per missing_kick/missing_snare count, 942 placed at a measured attack",
+    "placement_choice": "the 150 Hz-5 kHz band of mix and stem (max) with the attack threshold; on dnb-energetic-breakbeat the grid time alone puts 23/32 added hits within 30 ms (20 within 10 ms), the attack peak 24/32 (22 within 10 ms, median error 0.2 ms); the mix's band alone 23/32"
   }
 }
