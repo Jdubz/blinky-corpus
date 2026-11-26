@@ -48,6 +48,12 @@ jobs:
           pr=${url##*/}
           echo "opened #$pr"
         fi
-        # The squash commit keeps the contributor trailers (the commit body).
-        gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash --subject "$subject (#$pr)" --body "$body"
+        # The squash commit keeps the contributor trailers (the commit body). The label checks run on
+        # the same push and may already have closed a refused PR: then there is nothing to turn on.
+        if ! gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash --subject "$subject (#$pr)" --body "$body"; then
+          state=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json state -q .state)
+          [ "$state" != OPEN ] || exit 1
+          echo "#$pr is $state (the label checks refused it): auto-merge not needed"
+          exit 0
+        fi
         echo "auto-merge on for #$pr"
