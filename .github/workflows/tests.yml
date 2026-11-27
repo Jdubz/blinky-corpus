@@ -50,7 +50,8 @@ jobs:
           python tools/labels/labelcheck.py --all
         fi
     - name: Install
-      run: pip install -e '.[dev]'
+      # numpy: scripts/drum_suspect.py's tests, which skip without it
+      run: pip install -e '.[dev,suspect]'
     - name: Every track has its labels
       run: |
         for mp3 in edm/*.mp3; do

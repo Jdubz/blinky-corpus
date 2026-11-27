@@ -10,6 +10,8 @@ requires-python = ">=3.11"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# scripts/drum_suspect.py (the suspect maps) and its tests; blinky_scoring itself is standard library.
+suspect = ["numpy>=1.26"]
 
 [tool.setuptools]
 packages = ["blinky_scoring"]
