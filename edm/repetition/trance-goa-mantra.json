@@ -1,0 +1,28 @@
+{
+ "schema": 1,
+ "track": "trance-goa-mantra",
+ "audio_sha256": "73623b63befb132eba2d7ba7c556ecc0f4f313aa30552fbcde4518d41442f156",
+ "source": "blinky-firmware tests/tracker/consistency.py find_repetition at 7ffed1b (scripts/repetition.py)",
+ "lag_s": 3.4785078684872928,
+ "frame_s": 0.008,
+ "n_frames": 13041,
+ "regions": [
+  [77, 1291],
+  [1388, 1732],
+  [1793, 2968],
+  [2996, 3003],
+  [3021, 3058],
+  [3071, 3083],
+  [3087, 3402],
+  [3511, 6833],
+  [6883, 6944],
+  [6962, 8708],
+  [8742, 9986],
+  [10035, 10036],
+  [10037, 10038],
+  [10043, 10409],
+  [10410, 10421],
+  [10480, 11742],
+  [12437, 12562]
+ ]
+}

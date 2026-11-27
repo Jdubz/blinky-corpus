@@ -1,0 +1,25 @@
+{
+ "schema": 1,
+ "track": "techno-machine-drum",
+ "audio_sha256": "f7779a31b563063a84aaad5f9b1cb15ef39b56e62ccd3c5852d1ca556802e25f",
+ "source": "blinky-firmware tests/tracker/consistency.py find_repetition at 7ffed1b (scripts/repetition.py)",
+ "lag_s": 3.2874415051437578,
+ "frame_s": 0.008,
+ "n_frames": 16439,
+ "regions": [
+  [260, 323],
+  [337, 536],
+  [714, 959],
+  [1114, 1137],
+  [2075, 2087],
+  [4536, 4638],
+  [4646, 4655],
+  [4737, 4760],
+  [4772, 4827],
+  [4830, 4834],
+  [4958, 4962],
+  [9092, 9126],
+  [9169, 9176],
+  [9215, 9228]
+ ]
+}

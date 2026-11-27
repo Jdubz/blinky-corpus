@@ -1,0 +1,18 @@
+{
+ "schema": 1,
+ "track": "techno-minimal-01",
+ "audio_sha256": "ba1c747e0e1ade47d474f3407985c74cac4671bf3e21805c25c2f8545ac74c2a",
+ "source": "blinky-firmware tests/tracker/consistency.py find_repetition at 7ffed1b (scripts/repetition.py)",
+ "lag_s": 1.8748816974276923,
+ "frame_s": 0.008,
+ "n_frames": 15454,
+ "regions": [
+  [0, 5398],
+  [5406, 5412],
+  [5419, 14769],
+  [14822, 14826],
+  [14854, 14888],
+  [14899, 14904],
+  [14919, 15220]
+ ]
+}
