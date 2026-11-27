@@ -1,0 +1,10 @@
+{
+ "schema": 1,
+ "track": "dubstep-edm-halftime",
+ "audio_sha256": "2877b1c0a77047abb158031bea151954afee243fad44e740d62e39935abda24e",
+ "source": "blinky-firmware tests/tracker/consistency.py find_repetition at 7ffed1b (scripts/repetition.py)",
+ "lag_s": 5.333098888085749,
+ "frame_s": 0.008,
+ "n_frames": 14833,
+ "regions": []
+}

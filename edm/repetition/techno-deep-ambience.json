@@ -1,0 +1,12 @@
+{
+ "schema": 1,
+ "track": "techno-deep-ambience",
+ "audio_sha256": "b873f8373c4d1cf134f358105ff5914e601d60dd518a7a5c0ad04398f47c0fad",
+ "source": "blinky-firmware tests/tracker/consistency.py find_repetition at 7ffed1b (scripts/repetition.py)",
+ "lag_s": 7.680212805640806,
+ "frame_s": 0.008,
+ "n_frames": 15310,
+ "regions": [
+  [6179, 6226]
+ ]
+}

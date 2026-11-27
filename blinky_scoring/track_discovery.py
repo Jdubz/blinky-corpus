@@ -13,6 +13,7 @@ from typing import Any
 
 from .drum_scoring import drum_label_path, load_drum_labels
 from .onset_label_merge import apply_human_edits, load_human_edits
+from .repetition import repetition_path
 from .types import GroundTruth, GroundTruthHit, GroundTruthOnset
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ def discover_tracks(
         drums = drum_label_path(d, base)
         if drums.is_file():
             track["drum_labels"] = str(drums)
+        # The repeat lag and repeated regions repS scores against (repetition.py): label-free.
+        rep = repetition_path(d, base)
+        if rep.is_file():
+            track["repetition"] = str(rep)
         tracks.append(track)
 
     return tracks

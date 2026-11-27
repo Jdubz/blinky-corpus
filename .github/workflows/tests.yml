@@ -61,6 +61,19 @@ jobs:
           done
         done
         echo "$(ls edm/*.mp3 | wc -l) tracks, all labelled"
+    # The repetition maps' decode (scripts/repetition.py; tests/test_repetition.py's golden test).
+    - name: ffmpeg
+      run: command -v ffmpeg || (sudo apt-get update -q && sudo apt-get install -y -q ffmpeg)
     - name: Tests
       run: python -m pytest -v tests/
+    # edm/repetition/ is what scripts/repetition.py makes of each track now (repS's regions).
+    - name: Repetition maps are current
+      run: python scripts/repetition.py --check --out repetition-maps
+    - name: Upload the regenerated repetition maps
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: repetition-maps
+        path: repetition-maps/
+        if-no-files-found: ignore
 
