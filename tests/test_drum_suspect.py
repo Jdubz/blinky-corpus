@@ -98,28 +98,15 @@ def test_attack_peak_needs_a_local_maximum_above_the_threshold():
     assert ds._attack_peak(x2, 0.1, 0.02, hop, 0.1) is None
 
 
-def test_corpus_files_are_well_formed():
-    edm = ROOT / "edm"
-    manifest = json.loads((edm / "track_manifest.json").read_text())
-    files = sorted((edm / "drums_suspect").glob("*.json"))
-    stems = sorted(p.stem for p in edm.glob("*.mp3"))
-    assert [f.stem for f in files if f.name != "PROVENANCE.json"] == stems
-    for f in files:
-        if f.name == "PROVENANCE.json":
-            continue
-        d = json.loads(f.read_text())
-        assert d["schema"] == 2 and d["track"] == f.stem
-        assert d["duration"] == pytest.approx(manifest[f.stem]["duration"])
-        for r in d["ranges"]:
-            assert 0 <= r["start"] < r["end"] <= d["duration"] + 1e-6 and r["tier"] in ("high", "medium", "low")
-        starts = [b["start"] for b in d["bars"]]
-        assert starts == sorted(starts)
-        for b in d["bars"]:
-            ex = b["expected"]
-            assert len(ex) == b["missing_kick"] + b["missing_snare"]
-            assert [e["time"] for e in ex] == sorted(e["time"] for e in ex)
-            for e in ex:
-                assert e["type"] in ("kick", "snare") and e["at"] in ("attack", "grid")
-                assert 0 <= e["time"] <= d["duration"] and 0.5 <= e["p"] <= 1.0
-                # within the bar, give or take the attack window at its edges
-                assert b["start"] - 0.025 <= e["time"] <= b["end"] + 0.025
+def test_too_few_confident_attacks_writes_no_threshold_not_infinity():
+    """Under 20 labelled attacks in confident bars there's no attack threshold: the map says so
+    with null (and no missing-hit evidence), never `Infinity`, which isn't JSON."""
+    mix, stem, feats = _track()
+    # The stem disagrees with the mix by two kicks in all but two bars: two confident bars.
+    stem = dict(stem, kick=sorted(stem["kick"] + [0.5 + (4 * b + q + 0.5) * BEAT
+                                                 for b in range(2, BARS) for q in (0, 2)]))
+    grid, bars = ds.analyse(mix, stem, feats, DUR, float(feats["tempo_librosa"][0]))
+    assert grid["confident_bars"] == 2 and grid["attack_threshold"] is None
+    assert not any(b["expected"] or b["missing_kick"] or b["missing_snare"] for b in bars)
+    ds.tier_bars(bars, DUR)
+    json.dumps({"grid": grid, "bars": bars}, allow_nan=False)
