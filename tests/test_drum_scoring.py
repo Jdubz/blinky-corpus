@@ -145,25 +145,66 @@ def test_drum_label_precedence_human_then_adtof_then_legacy(tmp_path: Path) -> N
     assert drum_label_path(tmp_path, "t") == human
 
 
-def test_human_labels_load_as_is_with_hats_from_adtof(tmp_path: Path) -> None:
-    from blinky_scoring.drum_scoring import load_drum_labels
+def _human_track(tmp_path: Path, **over: object) -> Path:
+    """Track t: its mp3, ADTOF labels with a hat, and a complete human file for that mp3."""
+    import hashlib
 
+    mp3 = tmp_path / "t.mp3"
+    mp3.write_bytes(b"ID3 not really audio")
     _write(tmp_path / "drums_adtof" / "t.kick_weighted.json", {"onsets": [
         {"time": 1.0, "type": "kick", "weight": 1.0}, {"time": 1.25, "type": "hihat", "weight": 0.0},
     ]})
-    human = _write(
-        tmp_path / "drums_human" / "t.drums.json",
-        {
-            "schema": 1,
-            "track": "t",
-            "complete": True,
-            "onsets": [{"time": 2.0, "type": "snare"}, {"time": 1.0, "type": "kick"}],
-        },
-    )
+    doc = {
+        "schema": 1,
+        "track": "t",
+        "audio_sha256": hashlib.sha256(mp3.read_bytes()).hexdigest(),
+        "complete": True,
+        "onsets": [{"time": 2.0, "type": "snare"}, {"time": 1.0, "type": "kick"}],
+    }
+    return _write(tmp_path / "drums_human" / "t.drums.json", doc | over)
+
+
+def test_human_labels_load_as_is_with_hats_from_adtof(tmp_path: Path) -> None:
+    from blinky_scoring.drum_scoring import load_drum_labels
+
+    human = _human_track(tmp_path)
     labels = load_drum_labels(human, tmp_path / "unused.json")
     assert labels.kicks == [1.0] and labels.snares == [2.0] and labels.hats == [1.25]
     _write(human, {"complete": False, "onsets": []})
     with pytest.raises(ValueError, match="not marked complete"):
+        load_drum_labels(human, tmp_path / "unused.json")
+
+
+def test_human_labels_for_other_audio_are_refused(tmp_path: Path) -> None:
+    """Human ground truth is for one mp3 (audio_sha256). If the track's audio changed under it
+    (a PR that replaces an mp3 changes no label file, so the label checks don't look), its times
+    belong to other audio: refused loudly, never scored against."""
+    from blinky_scoring.drum_scoring import load_drum_labels
+
+    human = _human_track(tmp_path)
+    (tmp_path / "t.mp3").write_bytes(b"ID3 a re-encoded mp3")
+    with pytest.raises(ValueError, match="audio_sha256"):
+        load_drum_labels(human, tmp_path / "unused.json")
+    (tmp_path / "t.mp3").unlink()
+    with pytest.raises(ValueError, match="no audio"):
+        load_drum_labels(human, tmp_path / "unused.json")
+
+
+def test_human_labels_are_for_their_own_track(tmp_path: Path) -> None:
+    from blinky_scoring.drum_scoring import load_drum_labels
+
+    human = _human_track(tmp_path, track="other")
+    with pytest.raises(ValueError, match="track"):
+        load_drum_labels(human, tmp_path / "unused.json")
+
+
+def test_human_labels_without_their_adtof_hats_raise(tmp_path: Path) -> None:
+    """lone_hat needs the ADTOF hats; a missing ADTOF file is a missing label file, not 0 hats."""
+    from blinky_scoring.drum_scoring import load_drum_labels
+
+    human = _human_track(tmp_path)
+    (tmp_path / "drums_adtof" / "t.kick_weighted.json").unlink()
+    with pytest.raises(FileNotFoundError):
         load_drum_labels(human, tmp_path / "unused.json")
 
 

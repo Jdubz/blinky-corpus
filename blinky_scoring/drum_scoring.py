@@ -18,7 +18,8 @@ fallback (`lag.py` has the method and its sources). Where it came from is in the
 
 Labels, best first (`drum_label_path`):
   1. `edm/drums_human/<stem>.drums.json` marked complete: hand-curated ground truth (#4),
-     used as is.
+     used as is. Loading it raises if its `audio_sha256` isn't the track's mp3 (the times would
+     be another recording's) or its `track` isn't the file's.
   2. `edm/drums_adtof/<stem>.kick_weighted.json`: ADTOF (synthetic kick F1 0.93, snare 1.00),
      used as is. The consensus cleaning below was built for the band generator's false
      positives; applied to ADTOF it would drop real hits the onset consensus misses.
@@ -26,7 +27,7 @@ Labels, best first (`drum_label_path`):
      `ml-training/scripts/clean_kick_weighted.py`'s rule: an onset is kept only if a full-mix
      consensus onset backed by >= 2 systems lies within 70 ms. `ml-training/tests/
      test_drum_label_sync.py` checks this copy of the rule against that script.
-A human file's hats (not curated) come from the ADTOF file, for `lone_hat`.
+A human file's hats (not curated) come from the ADTOF file, for `lone_hat`; that file must exist.
 
 Pure Python: blinky-server doesn't depend on numpy.
 """
@@ -34,6 +35,7 @@ Pure Python: blinky-server doesn't depend on numpy.
 from __future__ import annotations
 
 import bisect
+import hashlib
 import json
 import math
 from dataclasses import dataclass, field
@@ -125,6 +127,14 @@ def _adtof_path(corpus_dir: Path, stem: str) -> Path:
     return corpus_dir / ADTOF_DIR / f"{stem}.kick_weighted.json"
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _human_complete(path: Path) -> bool:
     return path.is_file() and json.loads(path.read_text()).get("complete") is True
 
@@ -147,13 +157,25 @@ def load_drum_labels(kw_path: Path, consensus_path: Path) -> DrumLabels:
     if kw_path.parent.name == HUMAN_DIR:
         if data.get("complete") is not True:
             raise ValueError(f"{kw_path}: human drum labels are not marked complete")
+        corpus_dir = kw_path.parent.parent
+        stem = kw_path.name.removesuffix(".drums.json")
+        if data.get("track") != stem:
+            raise ValueError(f"{kw_path}: track is {data.get('track')!r}, not {stem!r}")
+        # The times are for one mp3. A PR that replaces it changes no label file, so the label
+        # checks (tools/labels/labelcheck.py) don't see it: refuse them here rather than score
+        # a run against another recording's hits.
+        audio = corpus_dir / f"{stem}.mp3"
+        if not audio.is_file():
+            raise ValueError(f"{kw_path}: no audio {audio} to check its audio_sha256 against")
+        if data.get("audio_sha256") != _sha256(audio):
+            raise ValueError(f"{kw_path}: audio_sha256 doesn't match {audio}: the labels are for "
+                             "other audio")
         onsets = data.get("onsets", [])
-        adtof = _adtof_path(kw_path.parent.parent, data.get("track") or kw_path.name.split(".")[0])
-        hats = (
-            sorted(o["time"] for o in json.loads(adtof.read_text()).get("onsets", [])
-                   if o["type"] == "hihat")
-            if adtof.is_file()
-            else []
+        # Hats aren't curated: the ADTOF file's (lone_hat). It must exist (CI checks every track).
+        hats = sorted(
+            o["time"]
+            for o in json.loads(_adtof_path(corpus_dir, stem).read_text()).get("onsets", [])
+            if o["type"] == "hihat"
         )
         return DrumLabels(
             sorted(o["time"] for o in onsets if o["type"] == "kick"),
