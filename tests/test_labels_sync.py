@@ -93,6 +93,21 @@ def test_reviewer_notes_pass_and_bad_ones_hold_the_file(repo):
     assert any(p.startswith(B) and "control or format" in p for p in problems)
 
 
+def test_untrusted_text_cannot_start_a_workflow_command(repo, capsys):
+    """A refused file's problems quote its content; printed as ::warning:: lines, a line break in
+    them must not start a workflow command of its own."""
+    doc = json.loads(label(repo, "a"))
+    doc["x\n::error::injected"] = 1
+    ready, good, problems = sync.validate({"ready": True, "tracks": {A: json.dumps(doc)}}, repo)
+    assert good == {} and problems
+    for p in problems:
+        sync.annotate("warning", p)
+    sync.annotate("warning", "a run name\r\n::add-mask::x 100%")
+    out = capsys.readouterr().out.splitlines()
+    assert out and all(line.startswith("::warning::") for line in out), out
+    assert "100%25" in out[-1]
+
+
 @pytest.mark.parametrize("export", [None, [], {"tracks": "x"}, {"ready": True}])
 def test_malformed_exports(repo, export):
     assert sync.validate(export, repo)[1] == {}
