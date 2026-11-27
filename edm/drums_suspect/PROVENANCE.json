@@ -1,5 +1,5 @@
 {
-  "purpose": "Review priority for tools/drum-reviewer: bars where mix-level ADTOF labels are most likely wrong, so humans fix the bad sections first. Not ground truth; the scorer never reads it.",
+  "purpose": "Review priority for the labels reviewer (blinky_time labels-service/): bars where mix-level ADTOF labels are most likely wrong, so humans fix the bad sections first. Not ground truth; the scorer never reads it.",
   "generator": {
     "script": "scripts/drum_suspect.py",
     "features_script": "scripts/drum_suspect_features.py",

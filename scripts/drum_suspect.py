@@ -27,7 +27,8 @@ against the bars around it:
 4. Per bar, the evidence:
    - disagree: slots where the mix and stem labels differ;
    - missing_c: slots with P_c >= 0.5, no mix label, and an attack at least as strong as the
-     10th percentile of labelled attacks in confident bars;
+     10th percentile of labelled attacks in confident bars (`grid.attack_threshold`; null, and
+     no missing_c anywhere, when there are fewer than 20 of them, with a warning);
    - unexpected_c: slots with P_c <= 0.1 that carry a mix label;
    - filter: the drum stem's per-bar log spectral centroid or 85% rolloff, level or slope, more
      than 3 robust SDs from the track's median.
@@ -273,7 +274,9 @@ def analyse(mix: dict, stem: dict, feats, duration: float, tempo_hint: float | N
     grid = {"bpm": round(60.0 / g["T"], 4), "beat_s": round(g["T"], 6), "origin_s": round(origin, 4),
             "slots_per_bar": SLOTS, "fit_within_12ms": round(g["on16"], 3),
             "fit_residual_ms_median": round(g["res_ms_median"], 2), "bars": len(bars),
-            "confident_bars": int(conf.sum()), "attack_threshold": round(att_thr, 4)}
+            "confident_bars": int(conf.sum()),
+            # None: under 20 labelled attacks in confident bars, so no missing-hit evidence at all
+            "attack_threshold": round(att_thr, 4) if np.isfinite(att_thr) else None}
     return grid, bars
 
 
@@ -345,7 +348,10 @@ def main() -> int:
                "purpose": "review priority only: where mix-level ADTOF labels are most likely wrong. Not ground truth.",
                "inputs": {"mix": "edm/drums_adtof", "stem": "edm/drums_adtof_stem"},
                "grid": grid, "ranges": ranges_from(bars), "bars": bars}
-        (out / f"{stem}.json").write_text(json.dumps(doc, separators=(",", ":")) + "\n")
+        (out / f"{stem}.json").write_text(json.dumps(doc, separators=(",", ":"), allow_nan=False) + "\n")
+        if grid["attack_threshold"] is None:
+            print(f"WARNING {stem}: under 20 labelled attacks in {grid['confident_bars']} confident bars: "
+                  "no attack threshold, so no missing-hit evidence or expected hits for this track")
         hi = sum(r["end"] - r["start"] for r in doc["ranges"] if r["tier"] == "high")
         print(f"{stem}: {grid['bpm']:.2f} BPM, {grid['bars']} bars, high-tier {100 * hi / duration:.0f}% of the track")
     return 0
