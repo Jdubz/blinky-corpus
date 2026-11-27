@@ -54,6 +54,12 @@ BOT = {"GIT_AUTHOR_NAME": "blinky labels sync", "GIT_AUTHOR_EMAIL": "labels-sync
 Run = Callable[..., str]
 
 
+def annotate(level: str, msg: str) -> None:
+    """A workflow annotation (::warning:: / ::error::). Messages quote untrusted text (export entries,
+    run names, gh output), so line breaks are escaped: none can start a workflow command of its own."""
+    print(f"::{level}::{labelcheck.gh_escape(msg)}")
+
+
 def run(*cmd: str, cwd: Path, env: dict[str, str] | None = None, check: bool = True) -> str:
     import os
     r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env={**os.environ, **(env or {})})
@@ -154,7 +160,7 @@ def approve_held_runs(gh: Run, git: Run, repo: Path, branch: str) -> list[str]:
                 and (r.get("triggering_actor") or {}).get("login") == BOT_ACTOR
                 and (r.get("head_repository") or {}).get("full_name") == (r.get("repository") or {}).get("full_name"))
         if not ours:
-            print(f"::warning::left held: run {r.get('id')} ({r.get('name')}) is not this batch's own run")
+            annotate("warning", f"left held: run {r.get('id')} ({r.get('name')}) is not this batch's own run")
             continue
         gh("api", "-X", "POST", f"repos/{{owner}}/{{repo}}/actions/runs/{int(r['id'])}/approve", cwd=repo)
         approved.append(f"{r.get('name')} ({r['id']})")
@@ -240,10 +246,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"approved held run {a} of #{batch[1]}")
         except RuntimeError as e:
             approval_error = f"could not approve the held runs of #{batch[1]}: {e}"
-            print(f"::error::{approval_error}")
+            annotate("error", approval_error)
     status = publish_from_export(args, repo, gh, git)
     if approval_error:
-        print(f"::error::{approval_error} (published anyway; the batch stays held until approved)")
+        annotate("error", f"{approval_error} (published anyway; the batch stays held until approved)")
         return 1
     return status
 
@@ -252,7 +258,7 @@ def publish_from_export(args: argparse.Namespace, repo: Path, gh: Run, git: Run)
     export = fetch_export(args.api)
     ready, files, problems = validate(export, repo)
     for p in problems:
-        print(f"::warning::left out: {p}")
+        annotate("warning", f"left out: {p}")
     if not files:
         print("nothing to publish")
         return 0
